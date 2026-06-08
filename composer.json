@@ -1,0 +1,35 @@
+{
+    "name": "elgibor-solution/laravel-accounting",
+    "description": "Enterprise-grade accounting engine for Laravel applications.",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "E-Solution",
+            "email": "dev@elgibor-solution.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.2",
+        "laravel/framework": "^11.0|^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "ESolution\\LaravelAccounting\\": "src/",
+            "ESolution\\LaravelAccounting\\Database\\Seeders\\": "database/seeders/",
+            "ESolution\\LaravelAccounting\\Database\\Migrations\\": "database/migrations/accounting/",
+            "ESolution\\LaravelAccounting\\Database\\Factories\\": "database/factories/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ESolution\\LaravelAccounting\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "ESolution\\LaravelAccounting\\AccountingServiceProvider"
+            ]
+        }
+    }
+}

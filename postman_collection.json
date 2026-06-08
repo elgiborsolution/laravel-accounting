@@ -1,0 +1,329 @@
+{
+	"info": {
+		"_postman_id": "8d633bdf-9047-4c8d-a5d7-5a57681acc19",
+		"name": "Laravel Accounting Package",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Account Categories",
+			"item": [
+				{
+					"name": "List Categories",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/accounting/categories",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"categories"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Category",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"type\": \"asset\",\n    \"category_code\": \"NEW_CAT\",\n    \"category_name\": \"New Category\",\n    \"report_type\": \"BS\",\n    \"sequence_no\": 10\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/accounting/categories",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"categories"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Accounts",
+			"item": [
+				{
+					"name": "List Accounts",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/accounting/accounts?search=1001",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"accounts"
+							],
+							"query": [
+								{
+									"key": "search",
+									"value": "1001"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Services",
+			"item": [
+				{
+					"name": "List Services",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/accounting/services",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"services"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Service with Mappings",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"service_code\": \"TEST_SERVICE\",\n    \"service_name\": \"Test Service\",\n    \"module_name\": \"TEST\",\n    \"mappings\": [\n        {\n            \"mapping_key\": \"test_d\",\n            \"mapping_name\": \"Test Debit\",\n            \"position\": \"D\",\n            \"account_id\": \"UUID-OF-ACCOUNT\"\n        },\n        {\n            \"mapping_key\": \"test_k\",\n            \"mapping_name\": \"Test Credit\",\n            \"position\": \"K\",\n            \"is_dynamic\": true\n        }\n    ]\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/accounting/services",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"services"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Reports",
+			"item": [
+				{
+					"name": "General Ledger",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/accounting/reports/general-ledger?account_id=UUID&start_date=2026-01-01&end_date=2026-01-31",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"reports",
+								"general-ledger"
+							],
+							"query": [
+								{
+									"key": "account_id",
+									"value": "UUID"
+								},
+								{
+									"key": "start_date",
+									"value": "2026-01-01"
+								},
+								{
+									"key": "end_date",
+									"value": "2026-01-31"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Trial Balance",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/accounting/reports/trial-balance?year=2026&month=1",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"reports",
+								"trial-balance"
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2026"
+								},
+								{
+									"key": "month",
+									"value": "1"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Profit & Loss",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/accounting/reports/profit-loss?year=2026&month=1",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"reports",
+								"profit-loss"
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2026"
+								},
+								{
+									"key": "month",
+									"value": "1"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Balance Sheet",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/accounting/reports/balance-sheet?year=2026&month=1",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"reports",
+								"balance-sheet"
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2026"
+								},
+								{
+									"key": "month",
+									"value": "1"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Cash Flow",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/accounting/reports/cash-flow?year=2026&month=1",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"accounting",
+								"reports",
+								"cash-flow"
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2026"
+								},
+								{
+									"key": "month",
+									"value": "1"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		}
+	]
+}
