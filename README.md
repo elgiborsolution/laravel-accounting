@@ -4,56 +4,6 @@
 
 For the full technical reference, start with [`docs/README.md`](./docs/README.md). It documents the architecture, public APIs, services, journal engine, mapping engine, and extension points directly from the source code.
 
-## Journal Engine
-
-The journal engine is the core accounting workflow in this package. It enforces the rule that posted journals are immutable and uses reversal journals for corrections.
-
-### Journal lifecycle
-
-```text
-Draft Journal
-  ↓
-Post Journal
-  ↓
-Reverse Journal
-  ↓
-Create Correct Journal
-  ↓
-Post Correct Journal
-```
-
-### What the engine supports
-
-- Draft journal creation
-- Manual journal creation
-- Posting journals
-- Reversal journals
-- Reversal audit metadata
-- Fiscal period locking
-- Balance validation
-
-### Reversal workflow
-
-If a posted journal is incorrect, the package creates a new reversing journal instead of editing the original entry.
-
-```php
-use ESolution\LaravelAccounting\Services\JournalService;
-
-$reversal = app(JournalService::class)->reverse(
-    $journalId,
-    'Incorrect account mapping'
-);
-```
-
-The reversal journal:
-
-- remains in the database
-- is posted
-- references the original journal through `reversal_of_id`
-- stores `reversal_reason`
-- stores `reversed_at`
-- is marked with `is_reversal = true`
-
 ## Overview
 
 The package is built around a small set of accounting entities:
