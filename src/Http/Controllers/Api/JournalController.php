@@ -4,6 +4,7 @@ namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
 use ESolution\LaravelAccounting\Models\JournalEntry;
+use ESolution\LaravelAccounting\Services\JournalService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
@@ -62,11 +63,31 @@ class JournalController extends BaseController
 
         $journal = Cache::tags($this->getCacheTags($tenantId))->rememberForever("show_{$id}", function () use ($id) {
             $entry = JournalEntry::findOrFail($id);
-            $entry->load(['details.account', 'service']);
+            $entry->load(['details.account', 'service', 'reversalOf', 'reversals']);
 
             return $entry;
         });
 
         return $this->successResponse('Journal retrieved successfully', $journal);
+    }
+
+    public function reverse(Request $request, $tenantId = null, $id = null)
+    {
+        if ($id === null) {
+            $id = $tenantId;
+            $tenantId = null;
+        }
+        $this->initializeTenantIfNeeded($tenantId);
+
+        $validated = $request->validate([
+            'reason' => 'required|string|max:1000',
+        ]);
+
+        $reversal = app(JournalService::class)->reverse($id, $validated['reason']);
+
+        return $this->successResponse('Journal reversed successfully', [
+            'original_journal_id' => $id,
+            'reversal_journal_id' => $reversal->id,
+        ], 201);
     }
 }

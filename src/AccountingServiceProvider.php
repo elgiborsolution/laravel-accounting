@@ -8,6 +8,8 @@ use ESolution\LaravelAccounting\Services\CoaService;
 use ESolution\LaravelAccounting\Services\JournalService;
 use ESolution\LaravelAccounting\Services\MappingService;
 use ESolution\LaravelAccounting\Services\ReportService;
+use ESolution\LaravelAccounting\Support\ServiceAccountTemplateRegistry;
+use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use Illuminate\Support\ServiceProvider;
 
 class AccountingServiceProvider extends ServiceProvider
@@ -19,13 +21,23 @@ class AccountingServiceProvider extends ServiceProvider
             __DIR__.'/../config/accounting.php', 'accounting'
         );
 
-        // Register services
-        $this->app->singleton(AccountingService::class, function ($app) {
-            return new AccountingService;
+        $this->app->singleton(ServiceCatalog::class, function ($app) {
+            return new ServiceCatalog;
         });
 
+        $this->app->singleton(ServiceAccountTemplateRegistry::class, function ($app) {
+            return new ServiceAccountTemplateRegistry;
+        });
+
+        // Register services
+        $this->app->singleton(AccountingService::class, function ($app) {
+            return new AccountingService($app->make(ServiceCatalog::class));
+        });
+
+        $this->app->alias(AccountingService::class, 'laravel-accounting');
+
         $this->app->singleton(JournalService::class, function ($app) {
-            return new JournalService;
+            return new JournalService($app->make(ServiceCatalog::class));
         });
 
         $this->app->singleton(CoaService::class, function ($app) {

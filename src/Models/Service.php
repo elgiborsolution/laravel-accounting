@@ -29,4 +29,9 @@ class Service extends Model
     {
         return $this->hasMany(ServiceAccount::class, 'service_id');
     }
+
+    public function mappings()
+    {
+        return $this->accounts();
+    }
 }

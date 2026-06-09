@@ -29,7 +29,10 @@
         "laravel": {
             "providers": [
                 "ESolution\\LaravelAccounting\\AccountingServiceProvider"
-            ]
+            ],
+            "aliases": {
+                "Accounting": "ESolution\\LaravelAccounting\\Facades\\Accounting"
+            }
         }
     }
 }
