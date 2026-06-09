@@ -7,16 +7,34 @@ use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use Exception;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class ClosingService
 {
+    protected function journalTable(): string
+    {
+        return config('accounting.table_prefix', 'acc_').'journal_entries';
+    }
+
+    protected function journalDetailTable(): string
+    {
+        return config('accounting.table_prefix', 'acc_').'journal_entry_details';
+    }
+
+    protected function wrapTable(string $table): string
+    {
+        return DB::connection()->getQueryGrammar()->wrapTable($table);
+    }
+
     /**
      * Perform monthly closing.
      */
     public function closeMonth($year, $month, $userId = null)
     {
         return DB::transaction(function () use ($year, $month, $userId) {
+            app(FiscalPeriodService::class)->ensureForDate(Carbon::create($year, $month, 1));
+
             // 1. Validate fiscal period exists
             $period = FiscalPeriod::where('year', $year)
                 ->where('month', $month)
@@ -31,14 +49,19 @@ class ClosingService
             }
 
             // 2. Validate journals are balanced
-            $totals = DB::table(config('accounting.table_prefix', 'acc_').'journal_entries as j')
-                ->join(config('accounting.table_prefix', 'acc_').'journal_entry_details as d', 'j.id', '=', 'd.journal_entry_id')
-                ->whereYear('j.trx_date', $year)
-                ->whereMonth('j.trx_date', $month)
-                ->where('j.status', JournalStatus::POSTED)
+            $journalTable = $this->journalTable();
+            $detailTable = $this->journalDetailTable();
+            $journalTableWrapped = $this->wrapTable($journalTable);
+            $detailTableWrapped = $this->wrapTable($detailTable);
+
+            $totals = DB::table($journalTable)
+                ->join($detailTable, "{$journalTable}.id", '=', "{$detailTable}.journal_entry_id")
+                ->whereYear("{$journalTable}.trx_date", $year)
+                ->whereMonth("{$journalTable}.trx_date", $month)
+                ->where("{$journalTable}.status", JournalStatus::POSTED)
                 ->select(
-                    DB::raw('SUM(d.debit) as total_debit'),
-                    DB::raw('SUM(d.credit) as total_credit')
+                    DB::raw("SUM({$detailTableWrapped}.debit) as total_debit"),
+                    DB::raw("SUM({$detailTableWrapped}.credit) as total_credit")
                 )
                 ->first();
 
@@ -65,17 +88,17 @@ class ClosingService
                 ->pluck('ending_balance', 'account_id');
 
             // 5. Get current month activity grouped by account
-            $activities = DB::table(config('accounting.table_prefix', 'acc_').'journal_entries as j')
-                ->join(config('accounting.table_prefix', 'acc_').'journal_entry_details as d', 'j.id', '=', 'd.journal_entry_id')
-                ->whereYear('j.trx_date', $year)
-                ->whereMonth('j.trx_date', $month)
-                ->where('j.status', JournalStatus::POSTED)
-                ->groupBy('d.account_id')
+            $activities = DB::table($journalTable)
+                ->join($detailTable, "{$journalTable}.id", '=', "{$detailTable}.journal_entry_id")
+                ->whereYear("{$journalTable}.trx_date", $year)
+                ->whereMonth("{$journalTable}.trx_date", $month)
+                ->where("{$journalTable}.status", JournalStatus::POSTED)
+                ->groupBy("{$detailTable}.account_id")
                 ->select(
-                    'd.account_id',
-                    DB::raw('SUM(d.debit) as debit'),
-                    DB::raw('SUM(d.credit) as credit'),
-                    DB::raw('COUNT(DISTINCT j.id) as journal_count')
+                    "{$detailTable}.account_id",
+                    DB::raw("SUM({$detailTableWrapped}.debit) as debit"),
+                    DB::raw("SUM({$detailTableWrapped}.credit) as credit"),
+                    DB::raw("COUNT(DISTINCT {$journalTableWrapped}.id) as journal_count")
                 )
                 ->get()
                 ->keyBy('account_id');
@@ -125,6 +148,38 @@ class ClosingService
 
             return $period;
         });
+    }
+
+    /**
+     * Close all open fiscal periods up to the current month.
+     */
+    public function closeThroughCurrentMonth($userId = null)
+    {
+        return DB::transaction(function () use ($userId) {
+            $periods = app(FiscalPeriodService::class)->ensureThroughCurrentMonth();
+
+            $periods = $periods->filter(fn (FiscalPeriod $period) => ! $period->is_closed);
+
+            if ($periods->isEmpty()) {
+                return collect();
+            }
+
+            $closedPeriods = collect();
+
+            foreach ($periods as $period) {
+                $closedPeriods->push($this->closeMonth($period->year, $period->month, $userId));
+            }
+
+            return $closedPeriods;
+        });
+    }
+
+    /**
+     * Alias for closing all open periods up to the current month.
+     */
+    public function closeUntilCurrentMonth($userId = null)
+    {
+        return $this->closeThroughCurrentMonth($userId);
     }
 
     /**

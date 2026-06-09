@@ -9,6 +9,7 @@ use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\Service;
+use ESolution\LaravelAccounting\Services\FiscalPeriodService;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use Exception;
 use Illuminate\Support\Facades\Cache;
@@ -324,6 +325,9 @@ class JournalService
     protected function checkPeriodLocked($date)
     {
         $date = \Illuminate\Support\Carbon::parse($date);
+
+        app(FiscalPeriodService::class)->ensureForJournalDate($date);
+
         $period = FiscalPeriod::where('year', $date->year)
             ->where('month', $date->month)
             ->first();
@@ -338,6 +342,8 @@ class JournalService
         if ($journal->status !== JournalStatus::POSTED) {
             throw new Exception('Only posted journals can be reversed');
         }
+
+        app(FiscalPeriodService::class)->ensureForJournalDate($journal->trx_date);
 
         if ($journal->reversals()->exists()) {
             throw new Exception('This journal has already been reversed');

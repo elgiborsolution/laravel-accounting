@@ -206,6 +206,18 @@ use ESolution\LaravelAccounting\Services\ClosingService;
 app(ClosingService::class)->closeMonth(2026, 1, auth()->id());
 ```
 
+### Close through current month
+
+[`ClosingService::closeThroughCurrentMonth()`](./src/Services/ClosingService.php) closes every open fiscal period up to the current month and returns the closed periods.
+
+```php
+use ESolution\LaravelAccounting\Services\ClosingService;
+
+$closedPeriods = app(ClosingService::class)->closeThroughCurrentMonth(auth()->id());
+```
+
+If a fiscal period does not exist yet, the package now creates it automatically from the earliest journal date through the current month before closing.
+
 ### Generate reports
 
 [`ReportService`](./src/Services/ReportService.php) provides report methods that are also exposed through the API.
@@ -612,6 +624,8 @@ These methods are available through the package but are not exposed as routes in
 - [`MappingService::findByKey(string $key)`](./src/Services/MappingService.php)
 - [`MappingService::getByService($serviceId)`](./src/Services/MappingService.php)
 - [`ClosingService::closeMonth($year, $month, $userId = null)`](./src/Services/ClosingService.php)
+- [`ClosingService::closeThroughCurrentMonth($userId = null)`](./src/Services/ClosingService.php)
+- [`ClosingService::closeUntilCurrentMonth($userId = null)`](./src/Services/ClosingService.php)
 - [`ClosingService::reopenMonth($year, $month, $userId = null)`](./src/Services/ClosingService.php)
 
 ## Architecture Flow
