@@ -8,11 +8,18 @@ class MappingService
 {
     public function findByKey(string $key)
     {
-        return ServiceAccount::where('mapping_key', $key)->where('is_active', true)->first();
+        return ServiceAccount::query()
+            ->where('mapping_key', $key)
+            ->active()
+            ->first();
     }
 
     public function getByService($serviceId)
     {
-        return ServiceAccount::where('service_id', $serviceId)->where('is_active', true)->orderBy('sequence_no')->get();
+        return ServiceAccount::query()
+            ->where('service_id', $serviceId)
+            ->active()
+            ->orderBy('sequence_no')
+            ->get();
     }
 }

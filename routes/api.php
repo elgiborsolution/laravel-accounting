@@ -42,6 +42,7 @@ $defineRoutes = function ($tenantId = null) {
     // Journals
     Route::get($prefix.'journals', [JournalController::class, 'index'])->name($tenantId ? 'tenant.journals.index' : 'journals.index');
     Route::get($prefix.'journals/{id}', [JournalController::class, 'show'])->name($tenantId ? 'tenant.journals.show' : 'journals.show');
+    Route::post($prefix.'journals/{id}/reverse', [JournalController::class, 'reverse'])->name($tenantId ? 'tenant.journals.reverse' : 'journals.reverse');
 
     // Reports
     Route::prefix($prefix.'reports')->group(function () use ($tenantId) {

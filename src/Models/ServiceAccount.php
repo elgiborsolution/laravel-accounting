@@ -18,12 +18,14 @@ class ServiceAccount extends Model
         'is_dynamic',
         'is_required',
         'status',
+        'is_active',
     ];
 
     protected $casts = [
         'is_dynamic' => 'boolean',
         'is_required' => 'boolean',
         'status' => 'boolean',
+        'is_active' => 'boolean',
     ];
 
     public function getTable()
@@ -39,5 +41,20 @@ class ServiceAccount extends Model
     public function account()
     {
         return $this->belongsTo(Account::class, 'account_id');
+    }
+
+    public function scopeActive($query)
+    {
+        return $query->where('status', true);
+    }
+
+    public function getIsActiveAttribute(): bool
+    {
+        return (bool) $this->attributes['status'];
+    }
+
+    public function setIsActiveAttribute(bool $value): void
+    {
+        $this->attributes['status'] = $value;
     }
 }

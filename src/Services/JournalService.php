@@ -2,18 +2,24 @@
 
 namespace ESolution\LaravelAccounting\Services;
 
+use ESolution\LaravelAccounting\Enums\AccountingServiceCode;
 use ESolution\LaravelAccounting\Enums\JournalStatus;
 use ESolution\LaravelAccounting\Exceptions\AccountingPeriodLockedException;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\Service;
+use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use Exception;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class JournalService
 {
+    public function __construct(
+        protected ServiceCatalog $serviceCatalog
+    ) {}
+
     /**
      * Create a journal entry using account mapping.
      */
@@ -26,6 +32,8 @@ class JournalService
                 throw new Exception('service_code is required for journal mapping');
             }
 
+            $serviceCode = $this->normalizeServiceCode($serviceCode);
+
             $service = Service::where('service_code', $serviceCode)
                 ->where('is_active', true)
                 ->first();
@@ -36,7 +44,7 @@ class JournalService
 
             // 2. Load active mappings for this service
             $serviceMappings = $service->accounts()
-                ->where('status', true)
+                ->active()
                 ->get()
                 ->keyBy('mapping_key');
 
@@ -223,6 +231,50 @@ class JournalService
     }
 
     /**
+     * Reverse a posted journal entry by creating a new reversing journal.
+     */
+    public function reverse($journalId, string $reason)
+    {
+        return DB::transaction(function () use ($journalId, $reason) {
+            $journal = JournalEntry::with('details')->findOrFail($journalId);
+
+            $this->validateReversal($journal);
+
+            $trxDate = now();
+
+            $reversal = JournalEntry::create([
+                'journal_no' => $this->generateJournalNo($trxDate),
+                'trx_date' => $trxDate,
+                'service_id' => $journal->service_id,
+                'source_type' => $journal->source_type,
+                'source_id' => $journal->source_id,
+                'reference_no' => $journal->reference_no,
+                'description' => $this->buildReversalDescription($journal, $reason),
+                'status' => JournalStatus::POSTED,
+                'posted_at' => $trxDate,
+                'posted_by' => auth()->id() ?? null,
+                'reversal_of_id' => $journal->id,
+                'reversal_reason' => $reason,
+                'reversed_at' => $trxDate,
+                'is_reversal' => true,
+            ]);
+
+            foreach ($journal->details as $detail) {
+                $reversal->details()->create([
+                    'account_id' => $detail->account_id,
+                    'debit' => $detail->credit,
+                    'credit' => $detail->debit,
+                    'description' => $detail->description,
+                ]);
+            }
+
+            $this->clearCache();
+
+            return $reversal->load(['details.account', 'service', 'reversalOf']);
+        });
+    }
+
+    /**
      * Post a journal entry.
      */
     public function post($id)
@@ -281,6 +333,47 @@ class JournalService
         }
     }
 
+    protected function validateReversal(JournalEntry $journal): void
+    {
+        if ($journal->status !== JournalStatus::POSTED) {
+            throw new Exception('Only posted journals can be reversed');
+        }
+
+        if ($journal->reversals()->exists()) {
+            throw new Exception('This journal has already been reversed');
+        }
+
+        $this->checkPeriodLocked($journal->trx_date);
+
+        if ($this->isFiscalYearClosed($journal->trx_date)) {
+            throw new Exception('This journal belongs to a closed fiscal year and cannot be reversed');
+        }
+    }
+
+    protected function isFiscalYearClosed($date): bool
+    {
+        $date = \Illuminate\Support\Carbon::parse($date);
+
+        $periods = FiscalPeriod::where('year', $date->year)->get();
+
+        if ($periods->isEmpty()) {
+            return false;
+        }
+
+        return $periods->every(fn (FiscalPeriod $period) => $period->is_closed);
+    }
+
+    protected function buildReversalDescription(JournalEntry $journal, string $reason): string
+    {
+        $base = 'Reversal of '.$journal->journal_no;
+
+        if ($reason !== '') {
+            return $base.' - '.$reason;
+        }
+
+        return $base;
+    }
+
     protected function generateJournalNo($date = null)
     {
         $format = config('accounting.journal.number_format', 'JV/{YEAR}/{MONTH}/{SEQ}');
@@ -304,5 +397,10 @@ class JournalService
         $seqStr = str_pad($seq, 4, '0', STR_PAD_LEFT);
 
         return str_replace(['{YEAR}', '{MONTH}', '{SEQ}'], [$year, $month, $seqStr], $format);
+    }
+
+    protected function normalizeServiceCode(string|AccountingServiceCode $serviceCode): string
+    {
+        return $this->serviceCatalog->normalizeCode($serviceCode);
     }
 }
