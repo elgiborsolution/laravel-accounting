@@ -50,7 +50,7 @@ class JournalController extends BaseController
             return $data;
         });
 
-        return $this->successResponse('Journals retrieved successfully', $journals);
+        return $journals;
     }
 
     public function show(Request $request, $tenantId = null, $id = null)

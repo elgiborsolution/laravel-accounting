@@ -51,6 +51,7 @@ The facade exposes the package entry points:
 - `CoaService`
 - `MappingService`
 - `ClosingService`
+- `FiscalPeriodService`
 - `ReportService`
 - `ServiceCatalog`
 - `ServiceAccountTemplateRegistry`
@@ -82,6 +83,7 @@ It reads mapping definitions, validates required mappings, supports dynamic acco
 The fiscal period engine is represented by:
 
 - `FiscalPeriod`
+- `FiscalPeriodService`
 - `JournalService::checkPeriodLocked()`
 - `ClosingService`
 
@@ -92,6 +94,7 @@ It prevents posting into a closed monthly period and supports monthly close/reop
 The summary engine is the monthly closing layer:
 
 - `ClosingService::closeMonth()`
+- `ClosingService::closeThroughCurrentMonth()`
 - `MonthlyBalance`
 
 It aggregates posted journal activity into monthly balances.
@@ -158,6 +161,18 @@ Compute monthly balances
 Mark fiscal period closed
   ↓
 Block late journal posting/reversal in that period
+```
+
+### Close Through Current Month
+
+```text
+Open fiscal periods up to current month
+  ↓
+Run `ClosingService::closeThroughCurrentMonth()`
+  ↓
+Close each open period in order
+  ↓
+Return list of closed periods
 ```
 
 ## Service Provider Wiring

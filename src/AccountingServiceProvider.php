@@ -3,6 +3,7 @@
 namespace ESolution\LaravelAccounting;
 
 use ESolution\LaravelAccounting\Services\AccountingService;
+use ESolution\LaravelAccounting\Services\FiscalPeriodService;
 use ESolution\LaravelAccounting\Services\ClosingService;
 use ESolution\LaravelAccounting\Services\CoaService;
 use ESolution\LaravelAccounting\Services\JournalService;
@@ -50,6 +51,10 @@ class AccountingServiceProvider extends ServiceProvider
 
         $this->app->singleton(ClosingService::class, function ($app) {
             return new ClosingService;
+        });
+
+        $this->app->singleton(FiscalPeriodService::class, function ($app) {
+            return new FiscalPeriodService;
         });
 
         $this->app->singleton(ReportService::class, function ($app) {

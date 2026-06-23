@@ -115,7 +115,17 @@ File: [`src/Services/MappingService.php`](/c:/laragon/www/package-custom/laravel
 File: [`src/Services/ClosingService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ClosingService.php)
 
 - `closeMonth($year, $month, $userId = null)`
+- `closeThroughCurrentMonth($userId = null)`
+- `closeUntilCurrentMonth($userId = null)`
 - `reopenMonth($year, $month, $userId = null)`
+
+### `FiscalPeriodService`
+
+File: [`src/Services/FiscalPeriodService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/FiscalPeriodService.php)
+
+- `ensureForDate($date)`
+- `ensureThroughCurrentMonth(?Carbon $fromDate = null)`
+- `ensureForJournalDate($date)`
 
 ### `ReportService`
 
