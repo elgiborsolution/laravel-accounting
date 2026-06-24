@@ -19,9 +19,15 @@ return new class extends Migration
             $blueprint->boolean('is_active')->default(true);
             $blueprint->timestamps();
 
-            $blueprint->foreign('account_id')->references('id')->on($tablePrefix.'accounts')->onDelete('cascade');
-
+            $blueprint->index('account_id');
             $blueprint->index('report_type');
+        });
+
+        Schema::table($tablePrefix.'report_mappings', function (Blueprint $blueprint) use ($tablePrefix) {
+            $blueprint->foreign('account_id')
+                ->references('id')
+                ->on($tablePrefix.'accounts')
+                ->cascadeOnDelete();
         });
     }
 

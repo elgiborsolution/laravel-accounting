@@ -22,8 +22,20 @@ return new class extends Migration
             $blueprint->boolean('status')->default(true);
             $blueprint->timestamps();
 
-            $blueprint->foreign('service_id')->references('id')->on($tablePrefix.'services')->onDelete('cascade');
-            $blueprint->foreign('account_id')->references('id')->on($tablePrefix.'accounts')->onDelete('set null');
+            $blueprint->index('service_id');
+            $blueprint->index('account_id');
+        });
+
+        Schema::table($tablePrefix.'service_accounts', function (Blueprint $blueprint) use ($tablePrefix) {
+            $blueprint->foreign('service_id')
+                ->references('id')
+                ->on($tablePrefix.'services')
+                ->cascadeOnDelete();
+
+            $blueprint->foreign('account_id')
+                ->references('id')
+                ->on($tablePrefix.'accounts')
+                ->nullOnDelete();
         });
     }
 

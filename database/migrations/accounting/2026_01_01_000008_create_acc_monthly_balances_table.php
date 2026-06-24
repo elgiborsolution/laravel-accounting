@@ -23,10 +23,15 @@ return new class extends Migration
             $blueprint->uuid('closed_by')->nullable();
             $blueprint->timestamps();
 
-            $blueprint->foreign('account_id')->references('id')->on($tablePrefix.'accounts')->onDelete('cascade');
-
             $blueprint->unique(['fiscal_year', 'fiscal_month', 'account_id'], 'acc_monthly_balances_unique');
             $blueprint->index(['fiscal_year', 'fiscal_month']);
+        });
+
+        Schema::table($tablePrefix.'monthly_balances', function (Blueprint $blueprint) use ($tablePrefix) {
+            $blueprint->foreign('account_id')
+                ->references('id')
+                ->on($tablePrefix.'accounts')
+                ->cascadeOnDelete();
         });
     }
 
