@@ -23,11 +23,17 @@ return new class extends Migration
             $blueprint->datetime('posted_at')->nullable();
             $blueprint->timestamps();
 
-            $blueprint->foreign('service_id')->references('id')->on($tablePrefix.'services')->onDelete('set null');
-
+            $blueprint->index('service_id');
             $blueprint->index('trx_date');
             $blueprint->index('status');
             $blueprint->index(['source_type', 'source_id']);
+        });
+
+        Schema::table($tablePrefix.'journal_entries', function (Blueprint $blueprint) use ($tablePrefix) {
+            $blueprint->foreign('service_id')
+                ->references('id')
+                ->on($tablePrefix.'services')
+                ->nullOnDelete();
         });
     }
 

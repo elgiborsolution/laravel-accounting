@@ -11,15 +11,15 @@ return new class extends Migration
         $tablePrefix = config('accounting.table_prefix', 'acc_');
 
         Schema::table($tablePrefix.'journal_entries', function (Blueprint $blueprint) use ($tablePrefix) {
-            $blueprint->uuid('reversal_of_id')->nullable()->after('posted_at');
-            $blueprint->text('reversal_reason')->nullable()->after('reversal_of_id');
-            $blueprint->datetime('reversed_at')->nullable()->after('reversal_reason');
-            $blueprint->boolean('is_reversal')->default(false)->after('reversed_at');
+            $blueprint->uuid('reversal_of_id')->nullable();
+            $blueprint->text('reversal_reason')->nullable();
+            $blueprint->datetime('reversed_at')->nullable();
+            $blueprint->boolean('is_reversal')->default(false);
 
             $blueprint->foreign('reversal_of_id')
                 ->references('id')
                 ->on($tablePrefix.'journal_entries')
-                ->onDelete('set null');
+                ->nullOnDelete();
 
             $blueprint->index('reversal_of_id');
             $blueprint->index('is_reversal');

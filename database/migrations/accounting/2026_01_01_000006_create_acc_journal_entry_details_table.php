@@ -18,11 +18,20 @@ return new class extends Migration
             $blueprint->text('description')->nullable();
             $blueprint->timestamps();
 
-            $blueprint->foreign('journal_entry_id')->references('id')->on($tablePrefix.'journal_entries')->onDelete('cascade');
-            $blueprint->foreign('account_id')->references('id')->on($tablePrefix.'accounts')->onDelete('cascade');
-
             $blueprint->index('journal_entry_id');
             $blueprint->index('account_id');
+        });
+
+        Schema::table($tablePrefix.'journal_entry_details', function (Blueprint $blueprint) use ($tablePrefix) {
+            $blueprint->foreign('journal_entry_id')
+                ->references('id')
+                ->on($tablePrefix.'journal_entries')
+                ->cascadeOnDelete();
+
+            $blueprint->foreign('account_id')
+                ->references('id')
+                ->on($tablePrefix.'accounts')
+                ->cascadeOnDelete();
         });
     }
 
