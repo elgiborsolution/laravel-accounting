@@ -13,7 +13,7 @@ This guide explains the extension points that are actually present in the packag
 ## Add New Journal Templates
 
 1. Add the template to `ServiceAccountTemplateRegistry`.
-2. Ensure the referenced `account_code` exists in the default COA or in the application database.
+2. Ensure the referenced `account_code` exists as a leaf posting account under the desired category tree branch.
 3. Re-run the seeder.
 
 ## Add New Mappings

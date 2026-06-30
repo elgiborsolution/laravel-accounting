@@ -1,34 +1,94 @@
 # Laravel Accounting Package
 
-`elgibor-solution/laravel-accounting` is a Laravel 11/12 accounting package that provides chart-of-accounts management, journal entry storage, service-to-account mappings, monthly closing, and financial reporting.
+`elgibor-solution/laravel-accounting` is a Laravel 11/12 accounting package that provides category-tree based chart-of-accounts management, journal entry storage, service-to-account mappings, monthly closing, and financial reporting.
 
-For the full technical reference, start with [`docs/README.md`](./docs/README.md). It documents the architecture, public APIs, services, journal engine, mapping engine, and extension points directly from the source code.
+For the full technical reference, start with [`docs/README.md`](./docs/README.md). It documents the normalized chart-of-accounts design, architecture, public APIs, services, journal engine, mapping engine, and extension points.
 
 ## Overview
 
 The package is built around a small set of accounting entities:
 
-- Account categories
-- Accounts
+- Account categories as a reporting tree
+- Posting accounts
 - Business services and account mappings
 - Journal entries and journal entry details
 - Fiscal periods
 - Monthly balances
-- Report mappings
 
 The package also ships with API controllers, reusable services, seeders, a factory, and package migrations. Tables are prefixed by default with `acc_`.
 
 ## Features
 
-- Chart of accounts with hierarchical parent/child accounts
+- Chart of accounts with hierarchical account categories and leaf posting accounts
 - Account category management with status toggling
 - Business service definitions with debit/credit mappings
 - Journal storage with validation and auto-posting
 - Journal number generation using a configurable format
 - Fiscal period locking to prevent posting into closed periods
 - Monthly closing and reopening
-- General ledger, trial balance, profit & loss, balance sheet, and cash flow reports
+- General ledger, trial balance, profit & loss, balance sheet, and cash flow reports aggregated through the category tree
 - Tenant-aware routes when a `{tenantId}` segment is used
+
+## Technical Design Summary
+
+This documentation uses a normalized accounting design:
+
+- `acc_account_categories` owns the hierarchy through `parent_id`.
+- Root category `type` values are `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, and `EXPENSE`.
+- `category_name` is fully custom.
+- `acc_accounts` contains posting accounts only.
+- `acc_accounts.parent_id` and `acc_accounts.level` are removed from the design.
+- Every account must have `category_id`.
+- Financial reports aggregate posting balances through the category tree, not through account hierarchy.
+
+Example category tree:
+
+```text
+ASSET
+`-- Current Asset
+    |-- Cash & Cash Equivalent
+    |-- Account Receivable
+    |-- Inventory
+    `-- Prepaid Expense
+
+ASSET
+`-- Fixed Asset
+    |-- Land
+    |-- Building
+    |-- Vehicle
+    `-- Equipment
+
+REVENUE
+`-- Sales Revenue
+
+EXPENSE
+`-- Operating Expense
+    |-- Salary Expense
+    |-- Electricity Expense
+    `-- Water Expense
+```
+
+Relationship diagram:
+
+```text
+acc_account_categories (Tree)
+        |
+        |-- parent_id -> acc_account_categories.id
+        |
+        `-- 1 : N
+             |
+             v
+        acc_accounts
+             |
+             v
+   acc_journal_entry_details
+             |
+             v
+      acc_monthly_balances
+             |
+             v
+      Financial Reports
+```
 
 ### What is not in this package
 
@@ -188,7 +248,7 @@ $journal = app(JournalService::class)->journalByMapping([
 
 ### Read the chart of accounts tree
 
-[`CoaService::getTree()`](./src/Services/CoaService.php) returns categories with top-level accounts and nested children.
+[`CoaService::getTree()`](./src/Services/CoaService.php) is documented as returning the category tree, with posting accounts grouped under their assigned categories. Report hierarchy lives in categories, not in accounts.
 
 ```php
 use ESolution\LaravelAccounting\Services\CoaService;
@@ -220,7 +280,7 @@ If a fiscal period does not exist yet, the package now creates it automatically 
 
 ### Generate reports
 
-[`ReportService`](./src/Services/ReportService.php) provides report methods that are also exposed through the API.
+[`ReportService`](./src/Services/ReportService.php) provides report methods that are also exposed through the API. General Ledger stays account-based for detail lookup, while Trial Balance, Profit Loss, Balance Sheet, and Cash Flow are documented as category-tree driven reports.
 
 ```php
 use ESolution\LaravelAccounting\Services\ReportService;
@@ -301,7 +361,7 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 
 ## Default ERP Journal Templates
 
-`DefaultServiceAccountMappingsSeeder` seeds `acc_service_accounts` with production-ready journal templates for the default ERP services. The seeder resolves `account_id` from seeded `account_code`, never hardcodes UUIDs, and uses `updateOrCreate()` for idempotent installs and upgrades.
+`DefaultServiceAccountMappingsSeeder` seeds `acc_service_accounts` with production-ready journal templates for the default ERP services. The seeder resolves `account_id` from seeded `account_code`, never hardcodes account IDs, and uses `updateOrCreate()` for idempotent installs and upgrades.
 
 ### What `acc_service_accounts` does
 
@@ -311,38 +371,19 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 - Dynamic account resolver
 - Validation layer for required mapping keys
 
-### Default ERP account codes
+### Default category and posting account examples
 
-| Code | Account |
-| --- | --- |
-| `1001` | Cash |
-| `1002` | Bank |
-| `1003` | Petty Cash |
-| `1101` | Accounts Receivable |
-| `1201` | Inventory |
-| `1301` | Prepaid Expense |
-| `1501` | Fixed Asset |
-| `1502` | Accumulated Depreciation |
-| `1601` | Input VAT |
-| `2001` | Accounts Payable |
-| `2101` | Salary Payable |
-| `2201` | Tax Payable |
-| `2301` | Output VAT |
-| `3001` | Opening Balance Equity |
-| `3101` | Retained Earnings |
-| `3201` | Revaluation Reserve |
-| `3301` | Income Summary |
-| `4001` | Sales Revenue |
-| `4101` | Other Income |
-| `4201` | Inventory Gain |
-| `5001` | Cost Of Goods Sold |
-| `5101` | Salary Expense |
-| `5201` | Operational Expense |
-| `5301` | Inventory Loss |
-| `5401` | Depreciation Expense |
-| `5501` | Bad Debt Expense |
-| `5601` | Sales Discount |
-| `5701` | Sales Return |
+| Type | Category path | Example posting accounts |
+| --- | --- | --- |
+| `ASSET` | `Current Asset > Cash & Cash Equivalent` | `Kas`, `Bank BCA`, `Bank Mandiri` |
+| `ASSET` | `Current Asset > Account Receivable` | `Piutang Dagang`, `Piutang Karyawan` |
+| `ASSET` | `Current Asset > Inventory` | `Persediaan Barang Dagang`, `Inventory In Transit` |
+| `ASSET` | `Current Asset > Prepaid Expense` | `Uang Muka Pembelian`, `Pajak Dibayar Dimuka` |
+| `ASSET` | `Fixed Asset > Land / Building / Vehicle / Equipment` | `Tanah`, `Bangunan`, `Kendaraan`, `Peralatan Kantor` |
+| `LIABILITY` | `Current Liability` | `Hutang Dagang`, `Hutang Pajak`, `Uang Muka Penjualan` |
+| `EQUITY` | `Owner Equity` | `Modal Pemilik`, `Saldo Laba Tahun Berjalan` |
+| `REVENUE` | `Sales Revenue` | `Penjualan Retail`, `Penjualan Online` |
+| `EXPENSE` | `Operating Expense > Salary / Electricity / Water` | `Salary Expense`, `Electricity Expense`, `Water Expense` |
 
 ### Template registry
 
@@ -417,7 +458,7 @@ Validation failures use the same wrapper:
   "status": 422,
   "message": "Validation Error",
   "errors": {
-    "account": ["Cannot delete account with children"]
+    "category_id": ["The category id field is required."]
   },
   "data": null
 }
@@ -468,10 +509,11 @@ Request body:
 
 ```json
 {
-  "category_id": "b3d2f1d0-3a8b-4b42-9d18-3b3e7d1f2f11",
+  "category_id": 12,
   "code": "1002",
   "name": "Bank BCA",
-  "status": true
+  "is_postable": true,
+  "is_active": true
 }
 ```
 
@@ -482,11 +524,12 @@ Sample response:
   "status": 201,
   "message": "Account created successfully",
   "data": {
-    "id": "6c3c8b8d-8c3f-4e5c-a8ea-2d8d3ef2f4f1",
-    "category_id": "b3d2f1d0-3a8b-4b42-9d18-3b3e7d1f2f11",
+    "id": 125,
+    "category_id": 12,
     "code": "1002",
     "name": "Bank BCA",
-    "status": true
+    "is_postable": true,
+    "is_active": true
   }
 }
 ```
@@ -495,7 +538,7 @@ Sample response:
 
 `GET /api/accounting/accounts?search=1001`
 
-The controller loads the related category in the cached result.
+The documented design assumes each returned account includes its related category because every posting account must belong to exactly one category.
 
 ### Services API
 
@@ -515,7 +558,7 @@ Request body:
       "mapping_key": "test_d",
       "mapping_name": "Test Debit",
       "position": "D",
-      "account_id": "UUID-OF-ACCOUNT"
+      "account_id": 125
     },
     {
       "mapping_key": "test_k",
@@ -568,11 +611,11 @@ The controller returns the journal header with loaded `details.account` and `ser
 
 #### General ledger
 
-`GET /api/accounting/reports/general-ledger?account_id={uuid}&start_date=2026-01-01&end_date=2026-01-31`
+`GET /api/accounting/reports/general-ledger?account_id={account_id}&start_date=2026-01-01&end_date=2026-01-31`
 
 Request validation requires:
 
-- `account_id` as a UUID
+- `account_id` as a numeric account identifier
 - `start_date` as a date
 - `end_date` as a date that is on or after `start_date`
 
@@ -584,9 +627,10 @@ Sample response shape:
   "message": "General Ledger retrieved successfully",
   "data": {
     "account": {
-      "id": "6c3c8b8d-8c3f-4e5c-a8ea-2d8d3ef2f4f1",
+      "id": 101,
       "code": "1000",
-      "name": "Kas"
+      "name": "Kas",
+      "category_path": ["ASSET", "Current Asset", "Cash & Cash Equivalent"]
     },
     "opening_balance": 0,
     "details": []
@@ -598,17 +642,113 @@ Sample response shape:
 
 `GET /api/accounting/reports/trial-balance?year=2026&month=1`
 
+The report is structured by `acc_account_categories` and rolls balances from posting accounts into the category tree.
+
+Example shape:
+
+```json
+{
+  "data": [
+    {
+      "type": "ASSET",
+      "category_name": "Current Asset",
+      "balance": 175000000,
+      "children": [
+        {
+          "category_name": "Cash & Cash Equivalent",
+          "balance": 150000000,
+          "accounts": [
+            {"code": "1000", "name": "Kas", "balance": 10000000},
+            {"code": "1010", "name": "Bank BCA", "balance": 90000000},
+            {"code": "1011", "name": "Bank Mandiri", "balance": 50000000}
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
 #### Profit & loss
 
 `GET /api/accounting/reports/profit-loss?year=2026&month=1`
+
+Example shape:
+
+```json
+{
+  "data": {
+    "revenue": [
+      {
+        "category_name": "Sales Revenue",
+        "balance": 250000000,
+        "accounts": [
+          {"code": "4001", "name": "Penjualan Retail", "balance": 180000000},
+          {"code": "4002", "name": "Penjualan Online", "balance": 70000000}
+        ]
+      }
+    ],
+    "expense": [
+      {
+        "category_name": "Operating Expense",
+        "balance": 95000000,
+        "children": [
+          {"category_name": "Salary Expense", "balance": 60000000},
+          {"category_name": "Electricity Expense", "balance": 20000000},
+          {"category_name": "Water Expense", "balance": 15000000}
+        ]
+      }
+    ],
+    "net_profit": 155000000
+  }
+}
+```
 
 #### Balance sheet
 
 `GET /api/accounting/reports/balance-sheet?year=2026&month=1`
 
+Example shape:
+
+```json
+{
+  "data": {
+    "asset": [
+      {"category_name": "Current Asset", "balance": 175000000},
+      {"category_name": "Fixed Asset", "balance": 320000000}
+    ],
+    "liability": [
+      {"category_name": "Current Liability", "balance": 85000000}
+    ],
+    "equity": [
+      {"category_name": "Owner Equity", "balance": 410000000}
+    ]
+  }
+}
+```
+
 #### Cash flow
 
 `GET /api/accounting/reports/cash-flow?year=2026&month=1`
+
+Example shape:
+
+```json
+{
+  "data": {
+    "operating": [
+      {"category_path": ["REVENUE", "Sales Revenue"], "balance": 250000000},
+      {"category_path": ["EXPENSE", "Operating Expense"], "balance": -95000000}
+    ],
+    "investing": [
+      {"category_path": ["ASSET", "Fixed Asset"], "balance": -20000000}
+    ],
+    "financing": [
+      {"category_path": ["LIABILITY", "Long Term Liability"], "balance": 40000000}
+    ]
+  }
+}
+```
 
 ### Internal service methods
 
@@ -632,17 +772,17 @@ These methods are available through the package but are not exposed as routes in
 
 ```text
 Business Module
-    ↓
+    ->
 Service Catalog
-    ↓
+    ->
 Account Mapping Engine
-    ↓
+    ->
 Journal Engine
-    ↓
+    ->
 Fiscal Period
-    ↓
+    ->
 Monthly Summary
-    ↓
+    ->
 Financial Reports
 ```
 
@@ -653,8 +793,8 @@ Financial Reports
 3. `JournalService` validates that every entry is balanced and that the fiscal period is not closed.
 4. A journal header is created in `acc_journal_entries`, with detail lines stored in `acc_journal_entry_details`.
 5. If `accounting.journal.auto_post` is enabled, the journal is immediately marked as `posted`.
-6. `ClosingService` aggregates posted journal activity into `acc_monthly_balances` for each account.
-7. `ReportService` reads `acc_monthly_balances`, `acc_report_mappings`, and posted journal details to generate reports.
+6. `ClosingService` aggregates posted journal activity into `acc_monthly_balances` for each posting account.
+7. `ReportService` reads posting-account balances and rolls them up through `acc_account_categories.parent_id` to generate category-tree based reports.
 
 ## Package Models
 
@@ -670,12 +810,13 @@ The package defines these main Eloquent models:
 - [`MonthlyBalance`](./src/Models/MonthlyBalance.php)
 - [`ReportMapping`](./src/Models/ReportMapping.php)
 
-All package models use UUID primary keys through the shared `HasUuid` trait.
+In this documentation baseline, account hierarchy is modeled only in `AccountCategory`, while `Account` is treated as a posting leaf with mandatory `category_id`.
 
 ## Notes for Integrators
 
 - The package uses cache tags for accounts, categories, services, and journals.
 - `AccountingPeriodLockedException` is thrown when posting into a closed fiscal period.
 - Route handlers support an optional tenant context when the path includes `{tenantId}` and a `tenancy()` helper is available.
-- The service layer currently shows a naming mismatch between controller/request fields (`status`, `mappings`) and the `Service` model/schema (`is_active`, `accounts()`), so confirm service create/update behavior against the live app before depending on it.
+- The service layer currently shows a naming mismatch between controller or request fields (`status`, `mappings`) and the `Service` model or schema (`is_active`, `accounts()`), so confirm service create or update behavior against the live app before depending on it.
 - The codebase currently includes only one feature test file for accounts; additional coverage for journals, reports, and closing would be a useful follow-up.
+

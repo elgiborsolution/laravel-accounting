@@ -2,6 +2,8 @@
 
 The account mapping engine is centered on `acc_services` and `acc_service_accounts`.
 
+Mappings always resolve to leaf posting accounts in `acc_accounts`. They do not define report hierarchy; report structure comes from `acc_account_categories`.
+
 ## `acc_services`
 
 Purpose:
@@ -51,7 +53,7 @@ Human-readable name shown in service setup and API responses.
 
 ### `account_id`
 
-Resolved from `account_code` during seeding for default mappings.
+Resolved from `account_code` during seeding for default mappings and must point to a posting account.
 
 ### `sequence_no`
 
@@ -91,14 +93,16 @@ Both return only active mappings.
 
 ```text
 Seeder
-  ↓
+  ->
 Resolve account_code to account_id
-  ↓
+  ->
 Update or create mapping row
-  ↓
+  ->
 Service loads mappings at runtime
-  ↓
+  ->
 Journal service validates and posts journal
+  ->
+Balances roll up through the category tree at report time
 ```
 
 ## Planned Feature
@@ -110,4 +114,3 @@ If you need custom account resolution rules, the current extension path is to:
 - replace the `ServiceAccountTemplateRegistry`
 - replace the seeder
 - override the `JournalService` binding in your application
-

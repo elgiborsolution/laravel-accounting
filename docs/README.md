@@ -1,9 +1,10 @@
 # Laravel Accounting Package Documentation
 
-This documentation is generated from the package source code and intended to be the single technical reference for the package.
+This documentation is the main technical reference for the package. It now uses the normalized category-tree accounting design as the documentation baseline, with `acc_account_categories` owning the hierarchy and `acc_accounts` limited to leaf posting accounts.
 
 ## Start Here
 
+- [Technical Design](./technical-design.md)
 - [Package Architecture](./architecture.md)
 - [Public API Reference](./reference.md)
 - [Available Services](./services.md)
@@ -22,6 +23,14 @@ This documentation is generated from the package source code and intended to be 
 - Exception: `AccountingPeriodLockedException`
 - Controllers: account category, account, service, journal, report
 - Seeders: default COA, default services, default service-account mappings
+
+## Documentation Baseline
+
+- Account hierarchy exists only in `acc_account_categories`.
+- Root category types are `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, and `EXPENSE`.
+- `category_name` is fully custom.
+- `acc_accounts` contains posting accounts only and always requires `category_id`.
+- General Ledger, Trial Balance, Profit Loss, Balance Sheet, and Cash Flow are documented as category-tree driven reports.
 
 ## Not Implemented In Source
 

@@ -2,6 +2,8 @@
 
 This package ships a default ERP service catalog in `acc_services` and seeds default mapping templates in `acc_service_accounts`.
 
+All account examples below refer to leaf posting accounts. Hierarchy belongs to `acc_account_categories`, not to `acc_accounts`.
+
 ## Source Of Truth
 
 - Service codes: [`src/Enums/AccountingServiceCode.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Enums/AccountingServiceCode.php)

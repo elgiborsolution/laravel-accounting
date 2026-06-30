@@ -21,7 +21,7 @@ class AccountControllerTest extends TestCase
 
     public function test_can_list_accounts()
     {
-        $category = AccountCategory::first();
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();
         Account::factory()->create(['category_id' => $category->id, 'code' => '1001', 'name' => 'Cash']);
 
         $response = $this->getJson('/api/accounting/accounts');
@@ -32,7 +32,7 @@ class AccountControllerTest extends TestCase
 
     public function test_can_create_account()
     {
-        $category = AccountCategory::first();
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();
 
         $data = [
             'category_id' => $category->id,
@@ -51,7 +51,7 @@ class AccountControllerTest extends TestCase
 
     public function test_can_show_account()
     {
-        $category = AccountCategory::first();
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();
         $account = Account::factory()->create(['category_id' => $category->id]);
 
         $response = $this->getJson("/api/accounting/accounts/{$account->id}");
@@ -62,7 +62,7 @@ class AccountControllerTest extends TestCase
 
     public function test_can_update_account()
     {
-        $category = AccountCategory::first();
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();
         $account = Account::factory()->create(['category_id' => $category->id, 'name' => 'Old Name']);
 
         $response = $this->putJson("/api/accounting/accounts/{$account->id}", [
@@ -75,7 +75,7 @@ class AccountControllerTest extends TestCase
 
     public function test_can_toggle_status()
     {
-        $category = AccountCategory::first();
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();
         $account = Account::factory()->create(['category_id' => $category->id, 'status' => true]);
 
         $response = $this->patchJson("/api/accounting/accounts/{$account->id}/toggle-status");
@@ -86,7 +86,7 @@ class AccountControllerTest extends TestCase
 
     public function test_can_delete_account()
     {
-        $category = AccountCategory::first();
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();
         $account = Account::factory()->create(['category_id' => $category->id]);
 
         $response = $this->deleteJson("/api/accounting/accounts/{$account->id}");

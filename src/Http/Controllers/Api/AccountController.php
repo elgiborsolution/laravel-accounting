@@ -42,8 +42,6 @@ class AccountController extends BaseController
             'category_id' => 'required|exists:acc_account_categories,id',
             'code' => 'required|string|max:30|unique:acc_accounts,code',
             'name' => 'required|string|max:200',
-            'parent_id' => 'nullable|exists:acc_accounts,id',
-            'level' => 'nullable|integer',
             'is_postable' => 'nullable|boolean',
             'status' => 'nullable|boolean',
         ]);
@@ -64,7 +62,7 @@ class AccountController extends BaseController
 
         $account = Cache::tags($this->getCacheTags($tenantId))->rememberForever('show_'.$id, function () use ($id) {
             $acc = Account::findOrFail($id);
-            $acc->load(['category', 'parent', 'children']);
+            $acc->load(['category']);
 
             return $acc;
         });
@@ -86,8 +84,6 @@ class AccountController extends BaseController
             'category_id' => 'nullable|exists:acc_account_categories,id',
             'code' => 'nullable|string|max:30|unique:acc_accounts,code,'.$id,
             'name' => 'nullable|string|max:200',
-            'parent_id' => 'nullable|exists:acc_accounts,id',
-            'level' => 'nullable|integer',
             'is_postable' => 'nullable|boolean',
             'status' => 'nullable|boolean',
         ]);
@@ -107,9 +103,6 @@ class AccountController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $account = Account::findOrFail($id);
-        if ($account->children()->count() > 0) {
-            return $this->errorResponse(['account' => 'Cannot delete account with children'], 422, 'Validation Error');
-        }
 
         $account->delete();
         $this->clearCache($tenantId);
@@ -136,5 +129,6 @@ class AccountController extends BaseController
     protected function clearCache($tenantId = null)
     {
         Cache::tags($this->getCacheTags($tenantId))->flush();
+        Cache::tags(array_merge(['acc_account_categories'], $tenantId ? ['acc_account_categories_tenant_'.$tenantId] : []))->flush();
     }
 }

@@ -4,6 +4,7 @@ namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
 use ESolution\LaravelAccounting\Models\AccountCategory;
+use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
@@ -14,9 +15,17 @@ class AccountCategoryController extends BaseController
     public function index(Request $request, $tenantId = null)
     {
         $this->initializeTenantIfNeeded($tenantId);
+        $treeMode = filter_var($request->query('tree', false), FILTER_VALIDATE_BOOLEAN);
 
-        $categories = Cache::tags($this->getCacheTags($tenantId))->rememberForever('index_all', function () {
-            return AccountCategory::orderBy('sequence_no')->get();
+        $categories = Cache::tags($this->getCacheTags($tenantId))->rememberForever('index_'.($treeMode ? 'tree' : 'flat'), function () use ($treeMode) {
+            $query = AccountCategory::with(['parent', 'children', 'accounts'])->orderBy('sequence_no')->orderBy('category_name');
+            $categories = $query->get();
+
+            if ($treeMode) {
+                return app(AccountCategoryTreeService::class)->getTree($categories);
+            }
+
+            return $categories;
         });
 
         return $this->successResponse('Account categories retrieved successfully', $categories);
@@ -27,13 +36,17 @@ class AccountCategoryController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $validated = $request->validate([
-            'type' => 'required|in:asset,liability,equity,revenue,expense',
+            'parent_id' => 'nullable|exists:acc_account_categories,id',
+            'type' => 'required|in:ASSET,LIABILITY,EQUITY,REVENUE,EXPENSE,asset,liability,equity,revenue,expense',
             'category_code' => 'required|string|max:50|unique:acc_account_categories,category_code',
             'category_name' => 'required|string|max:100',
-            'report_type' => 'required|string|max:50',
+            'report_type' => 'nullable|string|max:50',
             'sequence_no' => 'nullable|integer',
             'status' => 'nullable|boolean',
         ]);
+
+        $validated['type'] = strtoupper($validated['type']);
+        $validated['report_type'] = $validated['report_type'] ?? ($validated['type'] === 'ASSET' || $validated['type'] === 'LIABILITY' || $validated['type'] === 'EQUITY' ? 'BS' : 'PL');
 
         $category = AccountCategory::create($validated);
         $this->clearCache($tenantId);
@@ -50,7 +63,9 @@ class AccountCategoryController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $category = Cache::tags($this->getCacheTags($tenantId))->rememberForever('show_'.$id, function () use ($id) {
-            return AccountCategory::findOrFail($id);
+            $category = AccountCategory::with(['parent', 'children.accounts', 'accounts'])->findOrFail($id);
+
+            return app(AccountCategoryTreeService::class)->buildNode($category);
         });
 
         return $this->successResponse('Account category retrieved successfully', $category);
@@ -67,13 +82,22 @@ class AccountCategoryController extends BaseController
         $category = AccountCategory::findOrFail($id);
 
         $validated = $request->validate([
-            'type' => 'nullable|in:asset,liability,equity,revenue,expense',
+            'parent_id' => 'nullable|exists:acc_account_categories,id',
+            'type' => 'nullable|in:ASSET,LIABILITY,EQUITY,REVENUE,EXPENSE,asset,liability,equity,revenue,expense',
             'category_code' => 'nullable|string|max:50|unique:acc_account_categories,category_code,'.$id,
             'category_name' => 'nullable|string|max:100',
             'report_type' => 'nullable|string|max:50',
             'sequence_no' => 'nullable|integer',
             'status' => 'nullable|boolean',
         ]);
+
+        if (isset($validated['type'])) {
+            $validated['type'] = strtoupper($validated['type']);
+        }
+
+        if (! array_key_exists('report_type', $validated)) {
+            $validated['report_type'] = in_array($validated['type'] ?? $category->type, ['ASSET', 'LIABILITY', 'EQUITY'], true) ? 'BS' : 'PL';
+        }
 
         $category->update($validated);
         $this->clearCache($tenantId);
@@ -90,6 +114,9 @@ class AccountCategoryController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $category = AccountCategory::findOrFail($id);
+        if ($category->children()->exists() || $category->accounts()->exists()) {
+            return $this->errorResponse(['category' => 'Cannot delete category with descendants or accounts'], 422, 'Validation Error');
+        }
         $category->delete();
         $this->clearCache($tenantId);
 
@@ -115,5 +142,6 @@ class AccountCategoryController extends BaseController
     protected function clearCache($tenantId = null)
     {
         Cache::tags($this->getCacheTags($tenantId))->flush();
+        Cache::tags(array_merge(['acc_accounts'], $tenantId ? ['acc_accounts_tenant_'.$tenantId] : []))->flush();
     }
 }

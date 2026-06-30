@@ -3,6 +3,7 @@
 namespace ESolution\LaravelAccounting;
 
 use ESolution\LaravelAccounting\Services\AccountingService;
+use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
 use ESolution\LaravelAccounting\Services\FiscalPeriodService;
 use ESolution\LaravelAccounting\Services\ClosingService;
 use ESolution\LaravelAccounting\Services\CoaService;
@@ -42,7 +43,11 @@ class AccountingServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(CoaService::class, function ($app) {
-            return new CoaService;
+            return new CoaService($app->make(AccountCategoryTreeService::class));
+        });
+
+        $this->app->singleton(AccountCategoryTreeService::class, function ($app) {
+            return new AccountCategoryTreeService;
         });
 
         $this->app->singleton(MappingService::class, function ($app) {

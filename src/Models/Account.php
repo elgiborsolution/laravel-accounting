@@ -19,8 +19,6 @@ class Account extends Model
         'category_id',
         'code',
         'name',
-        'parent_id',
-        'level',
         'is_postable',
         'status',
     ];
@@ -38,16 +36,6 @@ class Account extends Model
     public function category()
     {
         return $this->belongsTo(AccountCategory::class, 'category_id');
-    }
-
-    public function parent()
-    {
-        return $this->belongsTo(Account::class, 'parent_id');
-    }
-
-    public function children()
-    {
-        return $this->hasMany(Account::class, 'parent_id');
     }
 
     public function mappings()

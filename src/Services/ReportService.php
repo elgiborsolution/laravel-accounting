@@ -2,24 +2,26 @@
 
 namespace ESolution\LaravelAccounting\Services;
 
-use ESolution\LaravelAccounting\Enums\ReportType;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\JournalEntryDetail;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
-use ESolution\LaravelAccounting\Models\ReportMapping;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class ReportService
 {
+    public function __construct(protected AccountCategoryTreeService $treeService)
+    {
+    }
+
     /**
      * General Ledger Report
      * Menampilkan mutasi detail per GL account.
      */
     public function generalLedger($accountId, $startDate, $endDate)
     {
-        $account = Account::with('category')->findOrFail($accountId);
+        $account = Account::with('category.parent')->findOrFail($accountId);
 
-        // Get Opening Balance from MonthlyBalance
         $startYear = date('Y', strtotime($startDate));
         $startMonth = date('m', strtotime($startDate));
 
@@ -28,7 +30,6 @@ class ReportService
             ->where('fiscal_month', (int) $startMonth)
             ->value('opening_balance') ?? 0;
 
-        // Get transactions before startDate in the same month if startDate is not the 1st
         if (date('d', strtotime($startDate)) != '01') {
             $prevTransactions = JournalEntryDetail::where('account_id', $accountId)
                 ->whereHas('header', function ($query) use ($startDate, $startYear, $startMonth) {
@@ -39,7 +40,7 @@ class ReportService
                 ->select(DB::raw('SUM(debit) as total_debit, SUM(credit) as total_credit'))
                 ->first();
 
-            if ($account->category->type === 'asset' || $account->category->type === 'expense') {
+            if (in_array($account->category->type, ['ASSET', 'EXPENSE'], true)) {
                 $openingBalance += ($prevTransactions->total_debit ?? 0) - ($prevTransactions->total_credit ?? 0);
             } else {
                 $openingBalance += ($prevTransactions->total_credit ?? 0) - ($prevTransactions->total_debit ?? 0);
@@ -55,7 +56,12 @@ class ReportService
             ->get();
 
         return [
-            'account' => $account,
+            'account' => array_merge(
+                $account->toArray(),
+                [
+                    'category_path' => $account->category ? $account->category->lineage()->map(fn ($node) => $node->category_name)->all() : [],
+                ]
+            ),
             'opening_balance' => $openingBalance,
             'details' => $details,
         ];
@@ -67,10 +73,14 @@ class ReportService
      */
     public function trialBalance($year, $month)
     {
-        return MonthlyBalance::with(['account.category'])
-            ->where('fiscal_year', $year)
-            ->where('fiscal_month', $month)
-            ->get();
+        $tree = $this->buildTreeWithBalances($year, $month);
+
+        return [
+            'data' => $tree,
+            'total_assets' => $this->sumByTypes($tree, ['ASSET']),
+            'total_liabilities' => $this->sumByTypes($tree, ['LIABILITY']),
+            'total_equity' => $this->sumByTypes($tree, ['EQUITY']),
+        ];
     }
 
     /**
@@ -79,35 +89,17 @@ class ReportService
      */
     public function profitLoss($year, $month)
     {
-        $mappings = ReportMapping::with(['account'])
-            ->where('report_type', ReportType::PROFIT_LOSS)
-            ->where('is_active', true)
-            ->orderBy('sequence_no')
-            ->get();
+        $tree = $this->buildTreeWithBalances($year, $month);
 
-        $balances = MonthlyBalance::where('fiscal_year', $year)
-            ->where('fiscal_month', $month)
-            ->get()
-            ->keyBy('account_id');
-
-        $reportData = $mappings->map(function ($mapping) use ($balances) {
-            $balance = $balances->get($mapping->account_id);
-
-            return [
-                'group' => $mapping->report_group,
-                'subgroup' => $mapping->report_subgroup,
-                'account_code' => $mapping->account->code,
-                'account_name' => $mapping->account->name,
-                'balance' => $balance ? $balance->ending_balance : 0,
-            ];
-        });
-
-        $totalRevenue = $reportData->where('group', 'REVENUE')->sum('balance');
-        $totalExpense = $reportData->whereIn('group', ['COGS', 'OPERATING_EXPENSE', 'OTHER_EXPENSE'])->sum('balance');
+        $revenue = $this->pickRootNodesByType($tree, ['REVENUE']);
+        $expense = $this->pickRootNodesByType($tree, ['EXPENSE']);
 
         return [
-            'data' => $reportData,
-            'net_income' => $totalRevenue - $totalExpense,
+            'data' => [
+                'revenue' => $revenue,
+                'expense' => $expense,
+            ],
+            'net_income' => $this->sumNodes($revenue) - $this->sumNodes($expense),
         ];
     }
 
@@ -117,34 +109,21 @@ class ReportService
      */
     public function balanceSheet($year, $month)
     {
-        $mappings = ReportMapping::with(['account'])
-            ->where('report_type', ReportType::BALANCE_SHEET)
-            ->where('is_active', true)
-            ->orderBy('sequence_no')
-            ->get();
+        $tree = $this->buildTreeWithBalances($year, $month);
 
-        $balances = MonthlyBalance::where('fiscal_year', $year)
-            ->where('fiscal_month', $month)
-            ->get()
-            ->keyBy('account_id');
-
-        $reportData = $mappings->map(function ($mapping) use ($balances) {
-            $balance = $balances->get($mapping->account_id);
-
-            return [
-                'group' => $mapping->report_group,
-                'subgroup' => $mapping->report_subgroup,
-                'account_code' => $mapping->account->code,
-                'account_name' => $mapping->account->name,
-                'balance' => $balance ? $balance->ending_balance : 0,
-            ];
-        });
+        $asset = $this->pickRootNodesByType($tree, ['ASSET']);
+        $liability = $this->pickRootNodesByType($tree, ['LIABILITY']);
+        $equity = $this->pickRootNodesByType($tree, ['EQUITY']);
 
         return [
-            'data' => $reportData,
-            'total_assets' => $reportData->where('group', 'ASSET')->sum('balance'),
-            'total_liabilities' => $reportData->where('group', 'LIABILITY')->sum('balance'),
-            'total_equity' => $reportData->where('group', 'EQUITY')->sum('balance'),
+            'data' => [
+                'asset' => $asset,
+                'liability' => $liability,
+                'equity' => $equity,
+            ],
+            'total_assets' => $this->sumNodes($asset),
+            'total_liabilities' => $this->sumNodes($liability),
+            'total_equity' => $this->sumNodes($equity),
         ];
     }
 
@@ -154,40 +133,98 @@ class ReportService
      */
     public function cashFlow($year, $month)
     {
-        // Implementation for Cash Flow
-        // This is more complex as it usually involves identifying cash accounts and their counterparts
-        // For now, let's follow the basic logic of report mappings for CF
+        $tree = $this->buildTreeWithBalances($year, $month);
 
-        $mappings = ReportMapping::with(['account'])
-            ->where('report_type', ReportType::CASH_FLOW)
-            ->where('is_active', true)
-            ->orderBy('sequence_no')
-            ->get();
-
-        $startDate = "$year-$month-01";
-        $endDate = date('Y-m-t', strtotime($startDate));
-
-        $cashFlowData = $mappings->map(function ($mapping) use ($startDate, $endDate) {
-            $sum = JournalEntryDetail::where('account_id', $mapping->account_id)
-                ->whereHas('header', function ($query) use ($startDate, $endDate) {
-                    $query->whereBetween('trx_date', [$startDate, $endDate])
-                        ->where('status', 'posted');
-                })
-                ->select(DB::raw('SUM(debit) - SUM(credit) as net_change'))
-                ->first();
-
-            return [
-                'group' => $mapping->report_group,
-                'subgroup' => $mapping->report_subgroup,
-                'account_code' => $mapping->account->code,
-                'account_name' => $mapping->account->name,
-                'net_change' => $sum->net_change ?? 0,
-            ];
-        });
+        $operating = $this->pickRootNodesByType($tree, ['REVENUE', 'EXPENSE']);
+        $investing = $this->pickNodesByCategoryCodes($tree, ['FIXED_ASSET', 'OTHER_ASSET']);
+        $financing = $this->pickRootNodesByType($tree, ['LIABILITY', 'EQUITY']);
 
         return [
-            'data' => $cashFlowData,
-            'net_cash_flow' => $cashFlowData->sum('net_change'),
+            'data' => [
+                'operating' => $operating,
+                'investing' => $investing,
+                'financing' => $financing,
+            ],
+            'net_cash_flow' => $this->sumNodes($operating) + $this->sumNodes($investing) + $this->sumNodes($financing),
         ];
+    }
+
+    protected function buildTreeWithBalances($year, $month): Collection
+    {
+        $accounts = Account::with('category')
+            ->where('is_postable', true)
+            ->orderBy('code')
+            ->get();
+
+        $balances = MonthlyBalance::where('fiscal_year', $year)
+            ->where('fiscal_month', $month)
+            ->get()
+            ->keyBy('account_id');
+
+        $tree = $this->treeService->getTree($this->treeService->getCategories(), $accounts);
+
+        return $this->applyBalances(collect($tree), $balances);
+    }
+
+    protected function applyBalances(Collection $nodes, Collection $balancesByAccountId): Collection
+    {
+        return $nodes->map(function (array $node) use ($balancesByAccountId) {
+            $children = $this->applyBalances(collect($node['children'] ?? []), $balancesByAccountId);
+
+            $accounts = collect($node['accounts'] ?? [])->map(function (array $account) use ($balancesByAccountId, $node) {
+                $endingBalance = (float) ($balancesByAccountId->get($account['id'])->ending_balance ?? 0);
+
+                return $account + [
+                    'balance' => $endingBalance,
+                    'category_path' => $node['path'] ?? [],
+                ];
+            })->values();
+
+            $node['children'] = $children->values()->all();
+            $node['accounts'] = $accounts->all();
+            $node['balance'] = $accounts->sum('balance') + $children->sum('balance');
+
+            return $node;
+        });
+    }
+
+    protected function pickRootNodesByType(Collection $tree, array $types): array
+    {
+        return $tree->filter(function (array $node) use ($types) {
+            return in_array($node['type'], $types, true);
+        })->values()->all();
+    }
+
+    protected function pickNodesByCategoryCodes(Collection $tree, array $codes): array
+    {
+        $matches = collect();
+
+        $walk = function (array $node) use (&$walk, $codes, &$matches) {
+            if (in_array($node['category_code'], $codes, true)) {
+                $matches->push($node);
+            }
+
+            foreach ($node['children'] ?? [] as $child) {
+                $walk($child);
+            }
+        };
+
+        foreach ($tree as $node) {
+            $walk($node);
+        }
+
+        return $matches->values()->all();
+    }
+
+    protected function sumByTypes(Collection $tree, array $types): float
+    {
+        return $this->sumNodes($this->pickRootNodesByType($tree, $types));
+    }
+
+    protected function sumNodes(array $nodes): float
+    {
+        return array_reduce($nodes, function ($carry, $node) {
+            return $carry + (float) ($node['balance'] ?? 0);
+        }, 0.0);
     }
 }

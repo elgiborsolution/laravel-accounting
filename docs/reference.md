@@ -1,6 +1,15 @@
 # Public API Reference
 
-This page documents the actual public API exposed by the package source.
+This page documents the package surface area together with the normalized chart of accounts design used by the documentation baseline. The reporting hierarchy is defined by `acc_account_categories`, while `acc_accounts` contains only posting accounts.
+
+## Technical Data Model
+
+- `acc_account_categories` is hierarchical through `parent_id`.
+- Root category `type` values are `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, and `EXPENSE`.
+- `category_name` is custom.
+- `acc_accounts` has no `parent_id` and no `level`.
+- Every account must have `category_id`.
+- Financial reports aggregate balances from posting accounts into the category tree.
 
 ## Facade API
 
@@ -102,6 +111,10 @@ File: [`src/Services/CoaService.php`](/c:/laragon/www/package-custom/laravel-acc
 - `getTree()`
 - `activateAccount($id)`
 - `deactivateAccount($id)`
+
+Behavior note:
+
+- `getTree()` is documented as returning the category tree with posting accounts grouped under their categories.
 
 ### `MappingService`
 
@@ -257,13 +270,13 @@ Controller methods:
 
 ### `AccountCategory`
 
+- `parent()`
+- `children()`
 - `accounts()`
 
 ### `Account`
 
 - `category()`
-- `parent()`
-- `children()`
 - `mappings()`
 
 ### `Service`
@@ -301,6 +314,10 @@ Controller methods:
 ### `ReportMapping`
 
 - `account()`
+
+Design note:
+
+- report mappings are not the primary statement hierarchy in this documentation baseline; standard reports are category-tree driven
 
 ## Enums
 
