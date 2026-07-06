@@ -3,12 +3,14 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 
 return new class extends Migration
 {
     public function up()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
+        $resolver = app(AccountingConnectionResolver::class);
         Schema::create($tablePrefix.'monthly_balances', function (Blueprint $blueprint) use ($tablePrefix) {
             $blueprint->uuid('id')->primary();
             $blueprint->integer('fiscal_year');
@@ -25,13 +27,12 @@ return new class extends Migration
 
             $blueprint->unique(['fiscal_year', 'fiscal_month', 'account_id'], 'acc_monthly_balances_unique');
             $blueprint->index(['fiscal_year', 'fiscal_month']);
-        });
-
-        Schema::table($tablePrefix.'monthly_balances', function (Blueprint $blueprint) use ($tablePrefix) {
-            $blueprint->foreign('account_id')
-                ->references('id')
-                ->on($tablePrefix.'accounts')
-                ->cascadeOnDelete();
+            if ($resolver->shouldCreateCrossConnectionForeignKeys()) {
+                $blueprint->foreign('account_id')
+                    ->references('id')
+                    ->on($tablePrefix.'accounts')
+                    ->cascadeOnDelete();
+            }
         });
     }
 

@@ -2,11 +2,9 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-use Illuminate\Database\Eloquent\Model;
-
-class FiscalPeriod extends Model
+class FiscalPeriod extends AccountingModel
 {
-    use HasUuid;
+    protected string $baseTable = 'fiscal_periods';
 
     protected $fillable = [
         'year',
@@ -25,8 +23,4 @@ class FiscalPeriod extends Model
         'closed_at' => 'datetime',
     ];
 
-    public function getTable()
-    {
-        return config('accounting.table_prefix', 'acc_').'fiscal_periods';
-    }
 }

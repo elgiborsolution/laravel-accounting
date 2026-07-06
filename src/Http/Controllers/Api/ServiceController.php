@@ -3,11 +3,13 @@
 namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
+use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\Service;
 use ESolution\LaravelAccounting\Models\ServiceAccount;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class ServiceController extends BaseController
 {
@@ -32,7 +34,7 @@ class ServiceController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $validated = $request->validate([
-            'service_code' => 'required|string|max:100|unique:acc_services,service_code',
+            'service_code' => ['required', 'string', 'max:100', Rule::unique(Service::validationTable(), 'service_code')],
             'service_name' => 'required|string|max:200',
             'module_name' => 'required|string|max:100',
             'description' => 'nullable|string',
@@ -41,13 +43,13 @@ class ServiceController extends BaseController
             'mappings.*.mapping_key' => 'required|string|max:150',
             'mappings.*.mapping_name' => 'required|string|max:200',
             'mappings.*.position' => 'required|in:D,K',
-            'mappings.*.account_id' => 'nullable|exists:acc_accounts,id',
+            'mappings.*.account_id' => ['nullable', Rule::exists(Account::validationTable(), 'id')],
             'mappings.*.sequence_no' => 'nullable|integer',
             'mappings.*.is_dynamic' => 'nullable|boolean',
             'mappings.*.is_required' => 'nullable|boolean',
         ]);
 
-        return DB::transaction(function () use ($validated, $tenantId) {
+        return DB::connection((new Service())->getConnectionName())->transaction(function () use ($validated, $tenantId) {
             $service = Service::create([
                 'service_code' => $validated['service_code'],
                 'service_name' => $validated['service_name'],
@@ -97,24 +99,24 @@ class ServiceController extends BaseController
         $service = Service::findOrFail($id);
 
         $validated = $request->validate([
-            'service_code' => 'nullable|string|max:100|unique:acc_services,service_code,'.$id,
+            'service_code' => ['nullable', 'string', 'max:100', Rule::unique(Service::validationTable(), 'service_code')->ignore($id)],
             'service_name' => 'nullable|string|max:200',
             'module_name' => 'nullable|string|max:100',
             'description' => 'nullable|string',
             'status' => 'nullable|boolean',
             'mappings' => 'nullable|array',
-            'mappings.*.id' => 'nullable|exists:acc_service_accounts,id',
+            'mappings.*.id' => ['nullable', Rule::exists(ServiceAccount::validationTable(), 'id')],
             'mappings.*.mapping_key' => 'required|string|max:150',
             'mappings.*.mapping_name' => 'required|string|max:200',
             'mappings.*.position' => 'required|in:D,K',
-            'mappings.*.account_id' => 'nullable|exists:acc_accounts,id',
+            'mappings.*.account_id' => ['nullable', Rule::exists(Account::validationTable(), 'id')],
             'mappings.*.sequence_no' => 'nullable|integer',
             'mappings.*.is_dynamic' => 'nullable|boolean',
             'mappings.*.is_required' => 'nullable|boolean',
             'mappings.*.status' => 'nullable|boolean',
         ]);
 
-        return DB::transaction(function () use ($validated, $service, $tenantId) {
+        return DB::connection($service->getConnectionName())->transaction(function () use ($validated, $service, $tenantId) {
             $service->update([
                 'service_code' => $validated['service_code'] ?? $service->service_code,
                 'service_name' => $validated['service_name'] ?? $service->service_name,

@@ -10,6 +10,7 @@ use ESolution\LaravelAccounting\Services\CoaService;
 use ESolution\LaravelAccounting\Services\JournalService;
 use ESolution\LaravelAccounting\Services\MappingService;
 use ESolution\LaravelAccounting\Services\ReportService;
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use ESolution\LaravelAccounting\Support\ServiceAccountTemplateRegistry;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use Illuminate\Support\ServiceProvider;
@@ -25,6 +26,10 @@ class AccountingServiceProvider extends ServiceProvider
 
         $this->app->singleton(ServiceCatalog::class, function ($app) {
             return new ServiceCatalog;
+        });
+
+        $this->app->singleton(AccountingConnectionResolver::class, function ($app) {
+            return new AccountingConnectionResolver;
         });
 
         $this->app->singleton(ServiceAccountTemplateRegistry::class, function ($app) {

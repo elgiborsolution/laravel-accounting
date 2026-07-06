@@ -2,11 +2,9 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-use Illuminate\Database\Eloquent\Model;
-
-class MonthlyBalance extends Model
+class MonthlyBalance extends AccountingModel
 {
-    use HasUuid;
+    protected string $baseTable = 'monthly_balances';
 
     protected $fillable = [
         'fiscal_year',
@@ -28,11 +26,6 @@ class MonthlyBalance extends Model
         'ending_balance' => 'decimal:2',
         'closed_at' => 'datetime',
     ];
-
-    public function getTable()
-    {
-        return config('accounting.table_prefix', 'acc_').'monthly_balances';
-    }
 
     public function account()
     {

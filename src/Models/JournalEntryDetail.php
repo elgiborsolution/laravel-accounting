@@ -2,11 +2,9 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-use Illuminate\Database\Eloquent\Model;
-
-class JournalEntryDetail extends Model
+class JournalEntryDetail extends AccountingModel
 {
-    use HasUuid;
+    protected string $baseTable = 'journal_entry_details';
 
     protected $fillable = [
         'journal_entry_id',
@@ -20,11 +18,6 @@ class JournalEntryDetail extends Model
         'debit' => 'decimal:2',
         'credit' => 'decimal:2',
     ];
-
-    public function getTable()
-    {
-        return config('accounting.table_prefix', 'acc_').'journal_entry_details';
-    }
 
     public function header()
     {

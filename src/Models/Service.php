@@ -2,11 +2,9 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-use Illuminate\Database\Eloquent\Model;
-
-class Service extends Model
+class Service extends MasterDataModel
 {
-    use HasUuid;
+    protected string $baseTable = 'services';
 
     protected $fillable = [
         'service_code',
@@ -14,15 +12,21 @@ class Service extends Model
         'module_name',
         'description',
         'is_active',
+        'status',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
     ];
 
-    public function getTable()
+    public function getStatusAttribute(): bool
     {
-        return config('accounting.table_prefix', 'acc_').'services';
+        return (bool) ($this->attributes['is_active'] ?? false);
+    }
+
+    public function setStatusAttribute($value): void
+    {
+        $this->attributes['is_active'] = (bool) $value;
     }
 
     public function accounts()

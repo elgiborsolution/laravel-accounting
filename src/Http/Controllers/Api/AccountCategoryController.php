@@ -7,6 +7,7 @@ use ESolution\LaravelAccounting\Models\AccountCategory;
 use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\Rule;
 
 class AccountCategoryController extends BaseController
 {
@@ -36,9 +37,9 @@ class AccountCategoryController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $validated = $request->validate([
-            'parent_id' => 'nullable|exists:acc_account_categories,id',
+            'parent_id' => ['nullable', Rule::exists(AccountCategory::validationTable(), 'id')],
             'type' => 'required|in:ASSET,LIABILITY,EQUITY,REVENUE,EXPENSE,asset,liability,equity,revenue,expense',
-            'category_code' => 'required|string|max:50|unique:acc_account_categories,category_code',
+            'category_code' => ['required', 'string', 'max:50', Rule::unique(AccountCategory::validationTable(), 'category_code')],
             'category_name' => 'required|string|max:100',
             'report_type' => 'nullable|string|max:50',
             'sequence_no' => 'nullable|integer',
@@ -82,9 +83,9 @@ class AccountCategoryController extends BaseController
         $category = AccountCategory::findOrFail($id);
 
         $validated = $request->validate([
-            'parent_id' => 'nullable|exists:acc_account_categories,id',
+            'parent_id' => ['nullable', Rule::exists(AccountCategory::validationTable(), 'id')],
             'type' => 'nullable|in:ASSET,LIABILITY,EQUITY,REVENUE,EXPENSE,asset,liability,equity,revenue,expense',
-            'category_code' => 'nullable|string|max:50|unique:acc_account_categories,category_code,'.$id,
+            'category_code' => ['nullable', 'string', 'max:50', Rule::unique(AccountCategory::validationTable(), 'category_code')->ignore($id)],
             'category_name' => 'nullable|string|max:100',
             'report_type' => 'nullable|string|max:50',
             'sequence_no' => 'nullable|integer',

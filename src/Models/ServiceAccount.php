@@ -2,11 +2,9 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-use Illuminate\Database\Eloquent\Model;
-
-class ServiceAccount extends Model
+class ServiceAccount extends MasterDataModel
 {
-    use HasUuid;
+    protected string $baseTable = 'service_accounts';
 
     protected $fillable = [
         'service_id',
@@ -27,11 +25,6 @@ class ServiceAccount extends Model
         'status' => 'boolean',
         'is_active' => 'boolean',
     ];
-
-    public function getTable()
-    {
-        return config('accounting.table_prefix', 'acc_').'service_accounts';
-    }
 
     public function service()
     {

@@ -4,8 +4,10 @@ namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
 use ESolution\LaravelAccounting\Models\Account;
+use ESolution\LaravelAccounting\Models\AccountCategory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\Rule;
 
 class AccountController extends BaseController
 {
@@ -39,8 +41,8 @@ class AccountController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $validated = $request->validate([
-            'category_id' => 'required|exists:acc_account_categories,id',
-            'code' => 'required|string|max:30|unique:acc_accounts,code',
+            'category_id' => ['required', Rule::exists(AccountCategory::validationTable(), 'id')],
+            'code' => ['required', 'string', 'max:30', Rule::unique(Account::validationTable(), 'code')],
             'name' => 'required|string|max:200',
             'is_postable' => 'nullable|boolean',
             'status' => 'nullable|boolean',
@@ -81,8 +83,8 @@ class AccountController extends BaseController
         $account = Account::findOrFail($id);
 
         $validated = $request->validate([
-            'category_id' => 'nullable|exists:acc_account_categories,id',
-            'code' => 'nullable|string|max:30|unique:acc_accounts,code,'.$id,
+            'category_id' => ['nullable', Rule::exists(AccountCategory::validationTable(), 'id')],
+            'code' => ['nullable', 'string', 'max:30', Rule::unique(Account::validationTable(), 'code')->ignore($id)],
             'name' => 'nullable|string|max:200',
             'is_postable' => 'nullable|boolean',
             'status' => 'nullable|boolean',

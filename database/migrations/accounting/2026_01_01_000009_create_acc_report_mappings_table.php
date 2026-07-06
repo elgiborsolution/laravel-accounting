@@ -3,12 +3,14 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 
 return new class extends Migration
 {
     public function up()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
+        $resolver = app(AccountingConnectionResolver::class);
         Schema::create($tablePrefix.'report_mappings', function (Blueprint $blueprint) use ($tablePrefix) {
             $blueprint->uuid('id')->primary();
             $blueprint->uuid('account_id');
@@ -21,13 +23,12 @@ return new class extends Migration
 
             $blueprint->index('account_id');
             $blueprint->index('report_type');
-        });
-
-        Schema::table($tablePrefix.'report_mappings', function (Blueprint $blueprint) use ($tablePrefix) {
-            $blueprint->foreign('account_id')
-                ->references('id')
-                ->on($tablePrefix.'accounts')
-                ->cascadeOnDelete();
+            if ($resolver->shouldCreateCrossConnectionForeignKeys()) {
+                $blueprint->foreign('account_id')
+                    ->references('id')
+                    ->on($tablePrefix.'accounts')
+                    ->cascadeOnDelete();
+            }
         });
     }
 

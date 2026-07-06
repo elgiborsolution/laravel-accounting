@@ -3,13 +3,16 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 
 return new class extends Migration
 {
     public function up()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
-        Schema::create($tablePrefix.'account_categories', function (Blueprint $blueprint) {
+        $connection = app(AccountingConnectionResolver::class)->resolveMasterDataConnection();
+
+        Schema::connection($connection)->create($tablePrefix.'account_categories', function (Blueprint $blueprint) {
             $blueprint->uuid('id')->primary();
             $blueprint->enum('type', ['asset', 'liability', 'equity', 'revenue', 'expense']);
             $blueprint->string('category_code', 50)->unique();
@@ -24,6 +27,8 @@ return new class extends Migration
     public function down()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
-        Schema::dropIfExists($tablePrefix.'account_categories');
+        $connection = app(AccountingConnectionResolver::class)->resolveMasterDataConnection();
+
+        Schema::connection($connection)->dropIfExists($tablePrefix.'account_categories');
     }
 };

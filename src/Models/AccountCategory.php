@@ -2,12 +2,11 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 
-class AccountCategory extends Model
+class AccountCategory extends MasterDataModel
 {
-    use HasUuid;
+    protected string $baseTable = 'account_categories';
 
     protected $fillable = [
         'parent_id',
@@ -31,11 +30,6 @@ class AccountCategory extends Model
     public function getTypeAttribute($value)
     {
         return $value ? strtoupper($value) : $value;
-    }
-
-    public function getTable()
-    {
-        return config('accounting.table_prefix', 'acc_').'account_categories';
     }
 
     public function parent()

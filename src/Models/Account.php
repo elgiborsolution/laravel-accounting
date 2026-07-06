@@ -4,11 +4,12 @@ namespace ESolution\LaravelAccounting\Models;
 
 use ESolution\LaravelAccounting\Database\Factories\AccountFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
 
-class Account extends Model
+class Account extends MasterDataModel
 {
-    use HasFactory, HasUuid;
+    use HasFactory;
+
+    protected string $baseTable = 'accounts';
 
     protected static function newFactory()
     {
@@ -27,11 +28,6 @@ class Account extends Model
         'is_postable' => 'boolean',
         'status' => 'boolean',
     ];
-
-    public function getTable()
-    {
-        return config('accounting.table_prefix', 'acc_').'accounts';
-    }
 
     public function category()
     {
