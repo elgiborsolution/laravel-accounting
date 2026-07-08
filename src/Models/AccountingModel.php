@@ -39,7 +39,8 @@ abstract class AccountingModel extends Model
 
     public static function validationTable(): string
     {
-        $model = new static();
+        // @phpstan-ignore-next-line
+        $model = new static;
         $connection = $model->getConnectionName();
         $table = $model->getTable();
 

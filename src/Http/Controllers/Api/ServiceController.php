@@ -49,7 +49,7 @@ class ServiceController extends BaseController
             'mappings.*.is_required' => 'nullable|boolean',
         ]);
 
-        return DB::connection((new Service())->getConnectionName())->transaction(function () use ($validated, $tenantId) {
+        return DB::connection((new Service)->getConnectionName())->transaction(function () use ($validated, $tenantId) {
             $service = Service::create([
                 'service_code' => $validated['service_code'],
                 'service_name' => $validated['service_name'],

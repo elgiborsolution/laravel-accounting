@@ -30,7 +30,7 @@ return new class extends Migration
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
 
-        Schema::table($tablePrefix.'journal_entries', function (Blueprint $blueprint) use ($tablePrefix) {
+        Schema::table($tablePrefix.'journal_entries', function (Blueprint $blueprint) {
             $blueprint->dropForeign(['reversal_of_id']);
             $blueprint->dropIndex(['reversal_of_id']);
             $blueprint->dropIndex(['is_reversal']);

@@ -1,9 +1,9 @@
 <?php
 
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
-use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 
 return new class extends Migration
 {
@@ -11,7 +11,7 @@ return new class extends Migration
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
         $resolver = app(AccountingConnectionResolver::class);
-        Schema::create($tablePrefix.'journal_entry_details', function (Blueprint $blueprint) use ($tablePrefix) {
+        Schema::create($tablePrefix.'journal_entry_details', function (Blueprint $blueprint) use ($tablePrefix, $resolver) {
             $blueprint->uuid('id')->primary();
             $blueprint->uuid('journal_entry_id');
             $blueprint->uuid('account_id');

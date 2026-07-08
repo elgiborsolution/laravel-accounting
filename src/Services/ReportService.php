@@ -10,9 +10,7 @@ use Illuminate\Support\Facades\DB;
 
 class ReportService
 {
-    public function __construct(protected AccountCategoryTreeService $treeService)
-    {
-    }
+    public function __construct(protected AccountCategoryTreeService $treeService) {}
 
     /**
      * General Ledger Report

@@ -22,5 +22,4 @@ class FiscalPeriod extends AccountingModel
         'is_closed' => 'boolean',
         'closed_at' => 'datetime',
     ];
-
 }

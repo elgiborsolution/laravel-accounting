@@ -6,9 +6,7 @@ use ESolution\LaravelAccounting\Models\Account;
 
 class CoaService
 {
-    public function __construct(protected AccountCategoryTreeService $treeService)
-    {
-    }
+    public function __construct(protected AccountCategoryTreeService $treeService) {}
 
     public function createAccount(array $data)
     {

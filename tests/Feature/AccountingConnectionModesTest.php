@@ -234,6 +234,25 @@ class AccountingConnectionModesTest extends TestCase
         $migration->down();
     }
 
+    public function test_master_migrations_skip_if_already_exist(): void
+    {
+        $this->useTenantWithSharedMasterMode();
+        $this->createEmptyConnection('master');
+        $this->createEmptyConnection('tenant');
+
+        $migration = require dirname(__DIR__, 2).'/database/migrations/accounting/2026_01_01_000001_create_acc_account_categories_table.php';
+        $migration->up();
+
+        $this->assertTrue(Schema::connection('master')->hasTable('acc_account_categories'));
+
+        try {
+            $migration->up();
+            $this->assertTrue(true);
+        } catch (\Throwable $e) {
+            $this->fail('Migration failed when running a second time on existing table: '.$e->getMessage());
+        }
+    }
+
     private function useSingleDatabaseMode(string $connection): void
     {
         $this->createEmptyConnection($connection);

@@ -15,6 +15,9 @@ class DefaultCoaSeeder extends Seeder
         $accounts = [
             // Current Asset > Cash & Cash Equivalent
             ['category_id' => $categories['CASH_CASH_EQUIVALENT']->id, 'code' => '1000', 'name' => 'Kas', 'is_postable' => true],
+            ['category_id' => $categories['CASH_CASH_EQUIVALENT']->id, 'code' => '1001', 'name' => 'Cash / Bank', 'is_postable' => true],
+            ['category_id' => $categories['CASH_CASH_EQUIVALENT']->id, 'code' => '1002', 'name' => 'Bank Transfer', 'is_postable' => true],
+            ['category_id' => $categories['CASH_CASH_EQUIVALENT']->id, 'code' => '1003', 'name' => 'Petty Cash', 'is_postable' => true],
             ['category_id' => $categories['CASH_CASH_EQUIVALENT']->id, 'code' => '1010', 'name' => 'Bank BCA', 'is_postable' => true],
             ['category_id' => $categories['CASH_CASH_EQUIVALENT']->id, 'code' => '1011', 'name' => 'Bank Mandiri', 'is_postable' => true],
             ['category_id' => $categories['CASH_CASH_EQUIVALENT']->id, 'code' => '1012', 'name' => 'Bank BNI', 'is_postable' => true],
