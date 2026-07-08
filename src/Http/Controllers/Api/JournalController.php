@@ -4,6 +4,7 @@ namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
 use ESolution\LaravelAccounting\Models\JournalEntry;
+use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use ESolution\LaravelAccounting\Services\JournalService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -45,7 +46,9 @@ class JournalController extends BaseController
                 ->orderBy('journal_no', 'desc')
                 ->paginate($perPage);
 
-            $data->load('service');
+            $data->setCollection(
+                $data->getCollection()->map(fn (JournalEntry $journal) => app(JournalRepository::class)->loadService($journal))
+            );
 
             return $data;
         });
@@ -63,9 +66,8 @@ class JournalController extends BaseController
 
         $journal = Cache::tags($this->getCacheTags($tenantId))->rememberForever("show_{$id}", function () use ($id) {
             $entry = JournalEntry::findOrFail($id);
-            $entry->load(['details.account', 'service', 'reversalOf', 'reversals']);
 
-            return $entry;
+            return app(JournalRepository::class)->attachViewRelations($entry);
         });
 
         return $this->successResponse('Journal retrieved successfully', $journal);

@@ -43,11 +43,6 @@ class JournalEntry extends AccountingModel
         });
     }
 
-    public function service()
-    {
-        return $this->belongsTo(Service::class, 'service_id');
-    }
-
     public function details()
     {
         return $this->hasMany(JournalEntryDetail::class, 'journal_entry_id');

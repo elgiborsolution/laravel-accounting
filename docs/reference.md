@@ -98,7 +98,8 @@ File: [`src/Services/JournalService.php`](/c:/laragon/www/package-custom/laravel
 
 Behavior notes:
 
-- `journalByMapping()` requires `service_code` and balanced items.
+- `journalByMapping()` resolves the service and mappings through repositories, requires `service_code`, and balanced items.
+- `journalByMapping()` is safe for shared master database setups because it does not depend on cross-connection `whereHas()` or eager loading against master tables.
 - `journalManual()` creates a balanced draft journal from arbitrary accounts.
 - `reverse()` creates a brand-new reversal journal and does not edit the original posted journal.
 - `post()` is idempotent for already-posted journals.

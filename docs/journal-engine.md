@@ -19,6 +19,8 @@ Draft journals are created by:
 
 In the current implementation, both methods create a journal with `status = draft` and detail rows, then optionally auto-post it if `accounting.journal.auto_post` is enabled.
 
+`journalByMapping()` resolves master data first through repositories, so service and mapping lookup can target a shared master connection while the journal header and details stay on the active application or tenant connection.
+
 ## Post Journal
 
 `JournalService::post($id)`:

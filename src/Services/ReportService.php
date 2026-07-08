@@ -5,12 +5,21 @@ namespace ESolution\LaravelAccounting\Services;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\JournalEntryDetail;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
+use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
+use ESolution\LaravelAccounting\Repositories\AccountRepository;
+use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class ReportService
 {
-    public function __construct(protected AccountCategoryTreeService $treeService) {}
+    public function __construct(
+        protected AccountCategoryTreeService $treeService,
+        protected AccountCategoryRepository $categories,
+        protected AccountRepository $accounts,
+        protected JournalRepository $journals
+    ) {
+    }
 
     /**
      * General Ledger Report
@@ -18,7 +27,13 @@ class ReportService
      */
     public function generalLedger($accountId, $startDate, $endDate)
     {
-        $account = Account::with('category.parent')->findOrFail($accountId);
+        $account = $this->accounts->findById($accountId);
+
+        if (! $account) {
+            abort(404);
+        }
+
+        $category = $this->categories->findById($account->category_id);
 
         $startYear = date('Y', strtotime($startDate));
         $startMonth = date('m', strtotime($startDate));
@@ -29,35 +44,31 @@ class ReportService
             ->value('opening_balance') ?? 0;
 
         if (date('d', strtotime($startDate)) != '01') {
-            $prevTransactions = JournalEntryDetail::where('account_id', $accountId)
-                ->whereHas('header', function ($query) use ($startDate, $startYear, $startMonth) {
-                    $query->where('trx_date', '>=', "$startYear-$startMonth-01")
-                        ->where('trx_date', '<', $startDate)
-                        ->where('status', 'posted');
-                })
-                ->select(DB::raw('SUM(debit) as total_debit, SUM(credit) as total_credit'))
+            $prefix = config('accounting.table_prefix', 'acc_');
+
+            $prevTransactions = DB::table($prefix.'journal_entry_details')
+                ->join($prefix.'journal_entries', $prefix.'journal_entries.id', '=', $prefix.'journal_entry_details.journal_entry_id')
+                ->where($prefix.'journal_entry_details.account_id', $accountId)
+                ->where($prefix.'journal_entries.trx_date', '>=', sprintf('%s-%s-01', $startYear, $startMonth))
+                ->where($prefix.'journal_entries.trx_date', '<', $startDate)
+                ->where($prefix.'journal_entries.status', 'posted')
+                ->select(DB::raw("SUM({$prefix}journal_entry_details.debit) as total_debit, SUM({$prefix}journal_entry_details.credit) as total_credit"))
                 ->first();
 
-            if (in_array($account->category->type, ['ASSET', 'EXPENSE'], true)) {
+            if (in_array($category->type ?? 'ASSET', ['ASSET', 'EXPENSE'], true)) {
                 $openingBalance += ($prevTransactions->total_debit ?? 0) - ($prevTransactions->total_credit ?? 0);
             } else {
                 $openingBalance += ($prevTransactions->total_credit ?? 0) - ($prevTransactions->total_debit ?? 0);
             }
         }
 
-        $details = JournalEntryDetail::with(['header'])
-            ->where('account_id', $accountId)
-            ->whereHas('header', function ($query) use ($startDate, $endDate) {
-                $query->whereBetween('trx_date', [$startDate, $endDate])
-                    ->where('status', 'posted');
-            })
-            ->get();
+        $details = $this->journals->getPostedDetailsByAccount($accountId, $startDate, $endDate);
 
         return [
             'account' => array_merge(
                 $account->toArray(),
                 [
-                    'category_path' => $account->category ? $account->category->lineage()->map(fn ($node) => $node->category_name)->all() : [],
+                    'category_path' => $category ? $this->categories->buildLineage($category)->map(fn ($node) => $node->category_name)->all() : [],
                 ]
             ),
             'opening_balance' => $openingBalance,
@@ -149,17 +160,16 @@ class ReportService
 
     protected function buildTreeWithBalances($year, $month): Collection
     {
-        $accounts = Account::with('category')
-            ->where('is_postable', true)
-            ->orderBy('code')
-            ->get();
-
+        $accounts = $this->accounts->allOrdered();
         $balances = MonthlyBalance::where('fiscal_year', $year)
             ->where('fiscal_month', $month)
             ->get()
             ->keyBy('account_id');
 
-        $tree = $this->treeService->getTree($this->treeService->getCategories(), $accounts);
+        $tree = $this->treeService->getTree(
+            $this->categories->allOrdered(),
+            $accounts
+        );
 
         return $this->applyBalances(collect($tree), $balances);
     }

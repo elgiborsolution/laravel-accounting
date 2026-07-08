@@ -139,6 +139,10 @@ The package configuration lives in [`config/accounting.php`](./config/accounting
 ```php
 return [
     'table_prefix' => 'acc_',
+    'master_data' => [
+        'use_shared_database' => env('ACCOUNTING_USE_SHARED_DATABASE', false),
+        'connection' => env('ACCOUNTING_MASTER_CONNECTION'),
+    ],
     'journal' => [
         'auto_post' => true,
         'number_format' => 'JV/{YEAR}/{MONTH}/{SEQ}',
@@ -154,10 +158,14 @@ return [
 ```
 
 - `table_prefix` controls every package table name.
+- `master_data.use_shared_database` enables a shared master database for `acc_account_categories`, `acc_accounts`, `acc_services`, and `acc_service_accounts`.
+- `master_data.connection` points to the master database connection name used when shared master mode is enabled.
 - `journal.auto_post` determines whether a created journal is immediately posted.
 - `journal.number_format` is used by `JournalService::generateJournalNo()` to build the journal number.
 - `fiscal.start_month` is present for fiscal-year configuration.
 - `route.prefix` and `route.middleware` control package API routing.
+
+Shared master mode does not change the public API. When it is disabled, the package keeps using the active application or tenant connection exactly as before.
 
 ## Usage
 
@@ -222,7 +230,7 @@ $journal = app(JournalService::class)->journalManual([
 
 ### Create a journal from a mapped service
 
-[`JournalService::journalByMapping()`](./src/Services/JournalService.php) validates `service_code`, checks mapping keys, and can auto-post when enabled in configuration.
+[`JournalService::journalByMapping()`](./src/Services/JournalService.php) resolves the service and its mappings through repositories, validates `service_code`, checks mapping keys, and can auto-post when enabled in configuration. The method does not rely on cross-connection eager loading or `whereHas()` against master tables.
 
 ```php
 use ESolution\LaravelAccounting\Enums\AccountingServiceCode;
@@ -361,7 +369,7 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 
 ## Default ERP Journal Templates
 
-`DefaultServiceAccountMappingsSeeder` seeds `acc_service_accounts` with production-ready journal templates for the default ERP services. The seeder resolves `account_id` from seeded `account_code`, never hardcodes account IDs, and uses `updateOrCreate()` for idempotent installs and upgrades.
+`DefaultServiceAccountMappingsSeeder` seeds `acc_service_accounts` with production-ready journal templates for the default ERP services. The seeder resolves `account_id` from seeded `account_code`, never hardcodes account IDs, and uses `updateOrCreate()` for idempotent installs and upgrades. In shared master mode, the seeders write master data through `ACCOUNTING_MASTER_CONNECTION`; otherwise they use the active application or tenant connection.
 
 ### What `acc_service_accounts` does
 
@@ -817,6 +825,7 @@ In this documentation baseline, account hierarchy is modeled only in `AccountCat
 - The package uses cache tags for accounts, categories, services, and journals.
 - `AccountingPeriodLockedException` is thrown when posting into a closed fiscal period.
 - Route handlers support an optional tenant context when the path includes `{tenantId}` and a `tenancy()` helper is available.
+- Master data lookup is repository-driven so the same service layer works for single database, multi database, and multi tenant setups.
 - The service layer currently shows a naming mismatch between controller or request fields (`status`, `mappings`) and the `Service` model or schema (`is_active`, `accounts()`), so confirm service create or update behavior against the live app before depending on it.
 - The codebase currently includes only one feature test file for accounts; additional coverage for journals, reports, and closing would be a useful follow-up.
 

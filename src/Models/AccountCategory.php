@@ -2,6 +2,7 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
+use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use Illuminate\Support\Collection;
 
 class AccountCategory extends MasterDataModel
@@ -49,28 +50,11 @@ class AccountCategory extends MasterDataModel
 
     public function descendantCategories(): Collection
     {
-        $descendants = collect();
-
-        $this->loadMissing('children');
-
-        foreach ($this->children as $child) {
-            $descendants->push($child);
-            $descendants = $descendants->merge($child->descendantCategories());
-        }
-
-        return $descendants->values();
+        return app(AccountCategoryRepository::class)->getDescendants($this);
     }
 
     public function lineage(): Collection
     {
-        $lineage = collect([$this]);
-        $current = $this->parent;
-
-        while ($current) {
-            $lineage->prepend($current);
-            $current = $current->parent;
-        }
-
-        return $lineage->values();
+        return app(AccountCategoryRepository::class)->buildLineage($this);
     }
 }

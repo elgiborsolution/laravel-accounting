@@ -5,6 +5,7 @@ namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
+use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
@@ -28,9 +29,7 @@ class AccountController extends BaseController
                 ->orderBy('code')
                 ->get();
 
-            $data->load('category');
-
-            return $data;
+            return app(AccountRepository::class)->attachCategories($data);
         });
 
         return $this->successResponse('Accounts retrieved successfully', $accounts);
@@ -64,9 +63,8 @@ class AccountController extends BaseController
 
         $account = Cache::tags($this->getCacheTags($tenantId))->rememberForever('show_'.$id, function () use ($id) {
             $acc = Account::findOrFail($id);
-            $acc->load(['category']);
 
-            return $acc;
+            return app(AccountRepository::class)->attachCategories(collect([$acc]))->first();
         });
 
         return $this->successResponse('Account retrieved successfully', $account);

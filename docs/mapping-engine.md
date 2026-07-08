@@ -82,12 +82,14 @@ Both return only active mappings.
 
 `JournalService::journalByMapping()`:
 
-- loads the active service
-- loads the service mappings
+- resolves the active service through the service repository
+- loads the service mappings through the service-account repository
 - validates each provided mapping key
 - resolves dynamic account IDs when provided
 - enforces required mappings
 - creates a balanced journal
+
+This lookup flow is connection-aware, so master data can live in a shared database while journal entries stay on the active application or tenant connection.
 
 ## Default Mapping Flow
 
@@ -98,7 +100,7 @@ Resolve account_code to account_id
   ->
 Update or create mapping row
   ->
-Service loads mappings at runtime
+Service loads mappings from the configured master or default connection at runtime
   ->
 Journal service validates and posts journal
   ->
@@ -107,7 +109,9 @@ Balances roll up through the category tree at report time
 
 ## Planned Feature
 
-There is no separate repository layer or dedicated resolver interface in the current source tree.
+The package now includes repository-backed lookup for services, accounts, categories, mappings, and journals.
+
+There is still no dedicated resolver interface in the current source tree.
 
 If you need custom account resolution rules, the current extension path is to:
 

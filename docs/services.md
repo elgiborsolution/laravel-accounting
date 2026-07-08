@@ -2,6 +2,8 @@
 
 This package ships a default ERP service catalog in `acc_services` and seeds default mapping templates in `acc_service_accounts`.
 
+Those master tables can live on the active application or tenant connection, or on a shared master connection when `ACCOUNTING_USE_SHARED_DATABASE=true`.
+
 All account examples below refer to leaf posting accounts. Hierarchy belongs to `acc_account_categories`, not to `acc_accounts`.
 
 ## Source Of Truth
@@ -21,6 +23,8 @@ All account examples below refer to leaf posting accounts. Hierarchy belongs to 
 - `sequence_no` controls ordering
 - `is_dynamic` means the account may be supplied at runtime
 - `is_required` means the mapping must be present for the service to post
+
+In shared master mode, `JournalService::journalByMapping()` resolves the service and mapping rows from the configured master connection instead of the tenant database.
 
 ## SALES
 

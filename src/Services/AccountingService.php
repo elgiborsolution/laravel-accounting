@@ -4,12 +4,14 @@ namespace ESolution\LaravelAccounting\Services;
 
 use ESolution\LaravelAccounting\Enums\AccountingServiceCode;
 use ESolution\LaravelAccounting\Models\Service;
+use ESolution\LaravelAccounting\Repositories\ServiceRepository;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
 
 class AccountingService
 {
     public function __construct(
-        protected ServiceCatalog $serviceCatalog
+        protected ServiceCatalog $serviceCatalog,
+        protected ServiceRepository $services
     ) {}
 
     public function journal()
@@ -39,9 +41,7 @@ class AccountingService
 
     public function service(string|AccountingServiceCode $service): ?Service
     {
-        return Service::query()
-            ->where('service_code', $this->serviceCatalog->normalizeCode($service))
-            ->first();
+        return $this->services->findByCode($this->serviceCatalog->normalizeCode($service));
     }
 
     public function catalog(): ServiceCatalog

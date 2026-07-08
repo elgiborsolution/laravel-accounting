@@ -24,8 +24,4 @@ class JournalEntryDetail extends AccountingModel
         return $this->belongsTo(JournalEntry::class, 'journal_entry_id');
     }
 
-    public function account()
-    {
-        return $this->belongsTo(Account::class, 'account_id');
-    }
 }

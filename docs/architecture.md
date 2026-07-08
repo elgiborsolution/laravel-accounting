@@ -175,6 +175,8 @@ Report layout is category-tree driven:
 - balances roll up recursively through `acc_account_categories.parent_id`
 - report subtotals come from category nodes, not account-parent relationships
 
+When shared master database mode is enabled, the category and account lookup still comes from the configured master connection, while the journal and balance tables continue to use the active application or tenant connection.
+
 ## Workflow Examples
 
 ### Cash Sale
@@ -184,7 +186,7 @@ Business event
   ->
 Select `SALES_CASH`
   ->
-Load template from `acc_service_accounts`
+Load template from `acc_service_accounts` through the repository layer
   ->
 Create balanced journal
   ->

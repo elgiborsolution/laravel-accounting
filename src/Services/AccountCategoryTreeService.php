@@ -2,68 +2,29 @@
 
 namespace ESolution\LaravelAccounting\Services;
 
-use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
+use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
+use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use Illuminate\Support\Collection;
 
 class AccountCategoryTreeService
 {
+    public function __construct(
+        protected AccountCategoryRepository $categories,
+        protected AccountRepository $accounts
+    ) {}
+
     public function getCategories(): Collection
     {
-        return AccountCategory::orderBy('sequence_no')
-            ->orderBy('category_name')
-            ->get();
+        return $this->categories->allOrdered();
     }
 
     public function getTree(?Collection $categories = null, ?Collection $accounts = null): Collection
     {
         $categories = $categories ?? $this->getCategories();
-        $accounts = $accounts ?? Account::orderBy('code')->get();
+        $accounts = $accounts ?? $this->accounts->allOrdered();
 
-        $categoriesByParent = $categories->groupBy(function ($category) {
-            return $category->parent_id ?? '__root__';
-        });
-
-        $accountsByCategory = $accounts->groupBy('category_id');
-
-        $buildNode = function (AccountCategory $category, array $path = []) use (&$buildNode, $categoriesByParent, $accountsByCategory): array {
-            $currentPath = array_merge($path, [$category->category_name]);
-
-            $children = $categoriesByParent->get($category->id, collect())
-                ->map(fn (AccountCategory $child) => $buildNode($child, $currentPath))
-                ->values();
-
-            $directAccounts = $accountsByCategory->get($category->id, collect())
-                ->map(function (Account $account) {
-                    return [
-                        'id' => $account->id,
-                        'category_id' => $account->category_id,
-                        'code' => $account->code,
-                        'name' => $account->name,
-                        'is_postable' => $account->is_postable,
-                        'status' => $account->status,
-                    ];
-                })
-                ->values();
-
-            return [
-                'id' => $category->id,
-                'parent_id' => $category->parent_id,
-                'type' => $category->type,
-                'category_code' => $category->category_code,
-                'category_name' => $category->category_name,
-                'report_type' => $category->report_type,
-                'sequence_no' => $category->sequence_no,
-                'status' => $category->status,
-                'path' => $currentPath,
-                'children' => $children,
-                'accounts' => $directAccounts,
-            ];
-        };
-
-        return $categoriesByParent->get('__root__', collect())
-            ->map(fn (AccountCategory $category) => $buildNode($category))
-            ->values();
+        return $this->categories->buildTree($categories, $accounts);
     }
 
     public function buildNode(AccountCategory $category, ?Collection $categories = null, ?Collection $accounts = null): array
@@ -73,12 +34,14 @@ class AccountCategoryTreeService
 
     public function getDescendants(AccountCategory $category): Collection
     {
-        return $category->descendantCategories();
+        return $this->categories->getDescendants($category);
     }
 
     public function buildPath(AccountCategory $category): array
     {
-        return $category->lineage()->map(fn (AccountCategory $node) => $node->category_name)->all();
+        return $this->categories->buildLineage($category)
+            ->map(fn (AccountCategory $node) => $node->category_name)
+            ->all();
     }
 
     public function flatten(Collection $tree): Collection

@@ -6,12 +6,15 @@ use ESolution\LaravelAccounting\Enums\JournalStatus;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
+use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use Exception;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class ClosingService
 {
+    public function __construct(protected AccountCategoryRepository $categories) {}
+
     protected function journalTable(): string
     {
         return config('accounting.table_prefix', 'acc_').'journal_entries';
@@ -73,7 +76,8 @@ class ClosingService
             }
 
             // 3. Get all accounts with their category types
-            $accounts = Account::with('category')->get();
+            $accounts = Account::query()->get();
+            $categoryTypes = $this->categories->allOrdered()->pluck('type', 'id');
 
             // 4. Get opening balances from previous month
             $prevMonth = $month - 1;
@@ -112,7 +116,7 @@ class ClosingService
                 $credit = $activity->credit ?? 0;
 
                 // Determine normal balance from category type
-                $type = $account->category->type ?? 'asset';
+                $type = $categoryTypes->get($account->category_id, 'asset');
                 $isDebitNormal = in_array($type, ['asset', 'expense']);
 
                 if ($isDebitNormal) {

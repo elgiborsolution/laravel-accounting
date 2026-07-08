@@ -25,6 +25,8 @@ The supported extension mechanism is the seeder and registry pair:
 - `ServiceAccountTemplateRegistry`
 - `DefaultServiceAccountMappingsSeeder`
 
+If shared master database mode is enabled, those seeders should target the configured master connection for `acc_services`, `acc_service_accounts`, `acc_accounts`, and `acc_account_categories`.
+
 ## Override Package Behavior
 
 The package uses Laravel container bindings. You can replace these in your application service provider:
@@ -47,6 +49,7 @@ There is no dedicated account-resolver contract or interface in the source tree.
 For now, the practical extension options are:
 
 - override `JournalService`
+- extend the repository classes when you need custom lookup behavior
 - extend `ServiceAccountTemplateRegistry`
 - pre-process payloads before calling `journalByMapping()`
 

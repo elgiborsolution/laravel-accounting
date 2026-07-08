@@ -3,7 +3,10 @@
 namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
+use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
+use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
+use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -19,14 +22,17 @@ class AccountCategoryController extends BaseController
         $treeMode = filter_var($request->query('tree', false), FILTER_VALIDATE_BOOLEAN);
 
         $categories = Cache::tags($this->getCacheTags($tenantId))->rememberForever('index_'.($treeMode ? 'tree' : 'flat'), function () use ($treeMode) {
-            $query = AccountCategory::with(['parent', 'children', 'accounts'])->orderBy('sequence_no')->orderBy('category_name');
-            $categories = $query->get();
+            $categoryRepository = app(AccountCategoryRepository::class);
+            $accountRepository = app(AccountRepository::class);
+            $categories = $categoryRepository->allOrdered();
 
             if ($treeMode) {
                 return app(AccountCategoryTreeService::class)->getTree($categories);
             }
 
-            return $categories;
+            return $categoryRepository->attachParentAndChildren(
+                $categoryRepository->attachAccounts($categories, $accountRepository->allOrdered())
+            );
         });
 
         return $this->successResponse('Account categories retrieved successfully', $categories);
@@ -64,7 +70,11 @@ class AccountCategoryController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $category = Cache::tags($this->getCacheTags($tenantId))->rememberForever('show_'.$id, function () use ($id) {
-            $category = AccountCategory::with(['parent', 'children.accounts', 'accounts'])->findOrFail($id);
+            $category = app(AccountCategoryRepository::class)->findById($id);
+
+            if (! $category) {
+                abort(404);
+            }
 
             return app(AccountCategoryTreeService::class)->buildNode($category);
         });
@@ -115,7 +125,10 @@ class AccountCategoryController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $category = AccountCategory::findOrFail($id);
-        if ($category->children()->exists() || $category->accounts()->exists()) {
+        $hasChildren = AccountCategory::where('parent_id', $category->id)->exists();
+        $hasAccounts = Account::where('category_id', $category->id)->exists();
+
+        if ($hasChildren || $hasAccounts) {
             return $this->errorResponse(['category' => 'Cannot delete category with descendants or accounts'], 422, 'Validation Error');
         }
         $category->delete();

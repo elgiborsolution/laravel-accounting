@@ -9,6 +9,8 @@ use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\JournalEntryDetail;
 use ESolution\LaravelAccounting\Models\Service;
 use ESolution\LaravelAccounting\Models\ServiceAccount;
+use ESolution\LaravelAccounting\Repositories\JournalRepository;
+use ESolution\LaravelAccounting\Repositories\ServiceRepository;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
@@ -88,10 +90,10 @@ class AccountingConnectionModesTest extends TestCase
         $this->assertTrue(DB::connection('single')->table('acc_accounts')->where('code', '1000')->exists());
         $this->assertTrue(DB::connection('single')->table('acc_journal_entries')->where('journal_no', 'JV/2026/07/0001')->exists());
 
-        $service->load('mappings.account');
+        $service = app(ServiceRepository::class)->loadMappings($service);
         $this->assertSame('1000', $service->mappings->first()->account->code);
-        $journal->load('details.account.category');
-        $this->assertSame('CASH_CASH_EQUIVALENT', $journal->details->first()->account->category->category_code);
+        $journal = app(JournalRepository::class)->attachViewRelations($journal);
+        $this->assertSame('CASH_CASH_EQUIVALENT', $journal->details->first()->account->category_id ? AccountCategory::where('id', $journal->details->first()->account->category_id)->value('category_code') : null);
     }
 
     public function test_shared_master_mode_uses_master_connection_for_master_tables(): void
@@ -158,13 +160,13 @@ class AccountingConnectionModesTest extends TestCase
         $this->assertTrue(DB::connection('master')->table('acc_accounts')->where('code', '1000')->exists());
         $this->assertTrue(DB::connection('tenant')->table('acc_journal_entries')->where('journal_no', 'JV/2026/07/0001')->exists());
 
-        $service->load('mappings.account');
+        $service = app(ServiceRepository::class)->loadMappings($service);
         $this->assertSame($mapping->id, $service->mappings->first()->id);
         $this->assertSame('1000', $service->mappings->first()->account->code);
 
-        $journal->load('details.account.category');
+        $journal = app(JournalRepository::class)->attachViewRelations($journal);
         $this->assertSame('1000', $journal->details->first()->account->code);
-        $this->assertSame('CASH_CASH_EQUIVALENT', $journal->details->first()->account->category->category_code);
+        $this->assertSame('CASH_CASH_EQUIVALENT', AccountCategory::where('id', $journal->details->first()->account->category_id)->value('category_code'));
     }
 
     public function test_multi_tenant_without_shared_master_keeps_master_data_on_tenant_connection(): void

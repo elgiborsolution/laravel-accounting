@@ -6,6 +6,7 @@ use ESolution\LaravelAccounting\Http\Controllers\BaseController;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\Service;
 use ESolution\LaravelAccounting\Models\ServiceAccount;
+use ESolution\LaravelAccounting\Repositories\ServiceRepository;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -20,10 +21,7 @@ class ServiceController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $services = Cache::tags($this->getCacheTags($tenantId))->rememberForever('index_all', function () {
-            $data = Service::all();
-            $data->load('mappings.account');
-
-            return $data;
+            return app(ServiceRepository::class)->allWithMappings();
         });
 
         return $this->successResponse('Services retrieved successfully', $services);
@@ -60,13 +58,15 @@ class ServiceController extends BaseController
 
             if (isset($validated['mappings'])) {
                 foreach ($validated['mappings'] as $mapping) {
-                    $service->mappings()->create($mapping);
+                    ServiceAccount::create($mapping + ['service_id' => $service->id]);
                 }
             }
 
+            $service = app(ServiceRepository::class)->loadMappings($service);
+
             $this->clearCache($tenantId);
 
-            return $this->successResponse('Service created successfully', $service->load('mappings'), 201);
+            return $this->successResponse('Service created successfully', $service, 201);
         });
     }
 
@@ -80,9 +80,8 @@ class ServiceController extends BaseController
 
         $service = Cache::tags($this->getCacheTags($tenantId))->rememberForever('show_'.$id, function () use ($id) {
             $svc = Service::findOrFail($id);
-            $svc->load('mappings.account');
 
-            return $svc;
+            return app(ServiceRepository::class)->loadMappings($svc);
         });
 
         return $this->successResponse('Service retrieved successfully', $service);
@@ -133,17 +132,21 @@ class ServiceController extends BaseController
                         $mapping->update($mappingData);
                         $existingMappingIds[] = $mapping->id;
                     } else {
-                        $newMapping = $service->mappings()->create($mappingData);
+                        $newMapping = ServiceAccount::create($mappingData + ['service_id' => $service->id]);
                         $existingMappingIds[] = $newMapping->id;
                     }
                 }
                 // Delete mappings not in the request
-                $service->mappings()->whereNotIn('id', $existingMappingIds)->delete();
+                ServiceAccount::where('service_id', $service->id)
+                    ->whereNotIn('id', $existingMappingIds)
+                    ->delete();
             }
+
+            $service = app(ServiceRepository::class)->loadMappings($service);
 
             $this->clearCache($tenantId);
 
-            return $this->successResponse('Service updated successfully', $service->load('mappings'));
+            return $this->successResponse('Service updated successfully', $service);
         });
     }
 
