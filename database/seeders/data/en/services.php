@@ -3,6 +3,8 @@
 return [
     ['service_code' => 'SALES_CASH', 'service_name' => 'Cash Sales', 'module_name' => 'SALES', 'description' => 'Records sales transactions that are paid immediately in cash or cash equivalent.', 'is_active' => true],
     ['service_code' => 'SALES_CREDIT', 'service_name' => 'Credit Sales', 'module_name' => 'SALES', 'description' => 'Records sales invoices that create customer receivables.', 'is_active' => true],
+    ['service_code' => 'SALES_CASH_VAT', 'service_name' => 'Cash Sales with VAT 11%', 'module_name' => 'SALES', 'description' => 'Records cash sales that include 11% output VAT, cost of goods sold, and inventory reduction.', 'is_active' => true],
+    ['service_code' => 'SALES_CREDIT_VAT', 'service_name' => 'Credit Sales with VAT 11%', 'module_name' => 'SALES', 'description' => 'Records credit sales that include receivables, cost of goods sold, inventory reduction, and 11% output VAT payable.', 'is_active' => true],
     ['service_code' => 'SALES_RETURN', 'service_name' => 'Sales Return', 'module_name' => 'SALES', 'description' => 'Records goods returned by customers and reverses related sales value.', 'is_active' => true],
     ['service_code' => 'SALES_DISCOUNT', 'service_name' => 'Sales Discount', 'module_name' => 'SALES', 'description' => 'Records discounts granted to customers on completed sales transactions.', 'is_active' => true],
     ['service_code' => 'SALES_WRITE_OFF', 'service_name' => 'Sales Write Off', 'module_name' => 'SALES', 'description' => 'Records sales-related balances that must be written off based on policy approval.', 'is_active' => true],
@@ -43,6 +45,7 @@ return [
 
     ['service_code' => 'TAX_OUTPUT', 'service_name' => 'Tax Output', 'module_name' => 'TAX', 'description' => 'Records output tax generated from taxable sales transactions.', 'is_active' => true],
     ['service_code' => 'TAX_INPUT', 'service_name' => 'Tax Input', 'module_name' => 'TAX', 'description' => 'Records input tax generated from taxable purchases or expenses.', 'is_active' => true],
+    ['service_code' => 'VAT_PAYMENT', 'service_name' => 'VAT Payment', 'module_name' => 'TAX', 'description' => 'Records settlement of output VAT payable to the authority.', 'is_active' => true],
     ['service_code' => 'TAX_PAYMENT', 'service_name' => 'Tax Payment', 'module_name' => 'TAX', 'description' => 'Records settlement of tax liabilities to tax authorities.', 'is_active' => true],
 
     ['service_code' => 'MONTH_END_CLOSING', 'service_name' => 'Month End Closing', 'module_name' => 'CLOSING', 'description' => 'Records accounting adjustments and transfers required during monthly closing.', 'is_active' => true],

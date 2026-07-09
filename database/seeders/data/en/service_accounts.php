@@ -6,10 +6,22 @@ return [
     ['service_code' => 'SALES_CASH', 'mapping_key' => 'sales_cash_cogs_d', 'mapping_name' => 'Cash Sales - Cost of Goods Sold', 'position' => 'D', 'account_code' => '5001', 'sequence_no' => 3, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
     ['service_code' => 'SALES_CASH', 'mapping_key' => 'sales_cash_inventory_k', 'mapping_name' => 'Cash Sales - Inventory', 'position' => 'K', 'account_code' => '1201', 'sequence_no' => 4, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
 
+    ['service_code' => 'SALES_CASH_VAT', 'mapping_key' => 'sales_cash_vat_cash_d', 'mapping_name' => 'Cash Sales with VAT 11% - Cash/Bank', 'position' => 'D', 'account_code' => '1001', 'sequence_no' => 1, 'is_dynamic' => true, 'is_required' => true, 'is_active' => true],
+    ['service_code' => 'SALES_CASH_VAT', 'mapping_key' => 'sales_cash_vat_sales_k', 'mapping_name' => 'Cash Sales with VAT 11% - Sales Revenue', 'position' => 'K', 'account_code' => '4001', 'sequence_no' => 2, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+    ['service_code' => 'SALES_CASH_VAT', 'mapping_key' => 'sales_cash_vat_vat_k', 'mapping_name' => 'Cash Sales with VAT 11% - Output VAT', 'position' => 'K', 'account_code' => '2301', 'sequence_no' => 3, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+    ['service_code' => 'SALES_CASH_VAT', 'mapping_key' => 'sales_cash_vat_cogs_d', 'mapping_name' => 'Cash Sales with VAT 11% - Cost Of Goods Sold', 'position' => 'D', 'account_code' => '5001', 'sequence_no' => 4, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+    ['service_code' => 'SALES_CASH_VAT', 'mapping_key' => 'sales_cash_vat_inventory_k', 'mapping_name' => 'Cash Sales with VAT 11% - Inventory', 'position' => 'K', 'account_code' => '1201', 'sequence_no' => 5, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+
     ['service_code' => 'SALES_CREDIT', 'mapping_key' => 'sales_credit_ar_d', 'mapping_name' => 'Credit Sales - Accounts Receivable', 'position' => 'D', 'account_code' => '1101', 'sequence_no' => 1, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
     ['service_code' => 'SALES_CREDIT', 'mapping_key' => 'sales_credit_sales_k', 'mapping_name' => 'Credit Sales - Sales Revenue', 'position' => 'K', 'account_code' => '4001', 'sequence_no' => 2, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
     ['service_code' => 'SALES_CREDIT', 'mapping_key' => 'sales_credit_cogs_d', 'mapping_name' => 'Credit Sales - Cost of Goods Sold', 'position' => 'D', 'account_code' => '5001', 'sequence_no' => 3, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
     ['service_code' => 'SALES_CREDIT', 'mapping_key' => 'sales_credit_inventory_k', 'mapping_name' => 'Credit Sales - Inventory', 'position' => 'K', 'account_code' => '1201', 'sequence_no' => 4, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+
+    ['service_code' => 'SALES_CREDIT_VAT', 'mapping_key' => 'sales_credit_vat_ar_d', 'mapping_name' => 'Credit Sales with VAT 11% - Accounts Receivable', 'position' => 'D', 'account_code' => '1101', 'sequence_no' => 1, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+    ['service_code' => 'SALES_CREDIT_VAT', 'mapping_key' => 'sales_credit_vat_sales_k', 'mapping_name' => 'Credit Sales with VAT 11% - Sales Revenue', 'position' => 'K', 'account_code' => '4001', 'sequence_no' => 2, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+    ['service_code' => 'SALES_CREDIT_VAT', 'mapping_key' => 'sales_credit_vat_vat_k', 'mapping_name' => 'Credit Sales with VAT 11% - Output VAT', 'position' => 'K', 'account_code' => '2301', 'sequence_no' => 3, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+    ['service_code' => 'SALES_CREDIT_VAT', 'mapping_key' => 'sales_credit_vat_cogs_d', 'mapping_name' => 'Credit Sales with VAT 11% - Cost Of Goods Sold', 'position' => 'D', 'account_code' => '5001', 'sequence_no' => 4, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+    ['service_code' => 'SALES_CREDIT_VAT', 'mapping_key' => 'sales_credit_vat_inventory_k', 'mapping_name' => 'Credit Sales with VAT 11% - Inventory', 'position' => 'K', 'account_code' => '1201', 'sequence_no' => 5, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
 
     ['service_code' => 'SALES_RETURN', 'mapping_key' => 'sales_return_sales_return_d', 'mapping_name' => 'Sales Return - Sales Return', 'position' => 'D', 'account_code' => '5701', 'sequence_no' => 1, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
     ['service_code' => 'SALES_RETURN', 'mapping_key' => 'sales_return_receivable_k', 'mapping_name' => 'Sales Return - Receivable/Cash', 'position' => 'K', 'account_code' => '1101', 'sequence_no' => 2, 'is_dynamic' => true, 'is_required' => true, 'is_active' => true],
@@ -103,6 +115,9 @@ return [
 
     ['service_code' => 'TAX_INPUT', 'mapping_key' => 'tax_input_vat_d', 'mapping_name' => 'Tax Input - Input VAT', 'position' => 'D', 'account_code' => '1601', 'sequence_no' => 1, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
     ['service_code' => 'TAX_INPUT', 'mapping_key' => 'tax_input_payable_k', 'mapping_name' => 'Tax Input - Cash/AP', 'position' => 'K', 'account_code' => '2001', 'sequence_no' => 2, 'is_dynamic' => true, 'is_required' => true, 'is_active' => true],
+
+    ['service_code' => 'VAT_PAYMENT', 'mapping_key' => 'vat_payment_vat_d', 'mapping_name' => 'VAT Payment - Output VAT', 'position' => 'D', 'account_code' => '2301', 'sequence_no' => 1, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
+    ['service_code' => 'VAT_PAYMENT', 'mapping_key' => 'vat_payment_cash_k', 'mapping_name' => 'VAT Payment - Cash/Bank', 'position' => 'K', 'account_code' => '1001', 'sequence_no' => 2, 'is_dynamic' => true, 'is_required' => true, 'is_active' => true],
 
     ['service_code' => 'TAX_PAYMENT', 'mapping_key' => 'tax_payment_payable_d', 'mapping_name' => 'Tax Payment - Tax Payable', 'position' => 'D', 'account_code' => '2201', 'sequence_no' => 1, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
     ['service_code' => 'TAX_PAYMENT', 'mapping_key' => 'tax_payment_cash_k', 'mapping_name' => 'Tax Payment - Cash/Bank', 'position' => 'K', 'account_code' => '1001', 'sequence_no' => 2, 'is_dynamic' => true, 'is_required' => true, 'is_active' => true],

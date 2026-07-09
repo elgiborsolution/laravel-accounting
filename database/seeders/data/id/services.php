@@ -3,6 +3,8 @@
 return [
     ['service_code' => 'SALES_CASH', 'service_name' => 'Penjualan Tunai', 'module_name' => 'SALES', 'description' => 'Mencatat transaksi penjualan yang dibayar segera dengan kas atau setara kas.', 'is_active' => true],
     ['service_code' => 'SALES_CREDIT', 'service_name' => 'Penjualan Kredit', 'module_name' => 'SALES', 'description' => 'Mencatat transaksi penjualan yang menimbulkan piutang pelanggan.', 'is_active' => true],
+    ['service_code' => 'SALES_CASH_VAT', 'service_name' => 'Penjualan Tunai PPN 11%', 'module_name' => 'SALES', 'description' => 'Mencatat penjualan tunai yang mencakup PPN keluaran 11%, pengakuan HPP, dan pengurangan persediaan.', 'is_active' => true],
+    ['service_code' => 'SALES_CREDIT_VAT', 'service_name' => 'Penjualan Kredit PPN 11%', 'module_name' => 'SALES', 'description' => 'Mencatat penjualan kredit yang mencakup piutang usaha, HPP, pengurangan persediaan, dan hutang PPN keluaran 11%.', 'is_active' => true],
     ['service_code' => 'SALES_RETURN', 'service_name' => 'Retur Penjualan', 'module_name' => 'SALES', 'description' => 'Mencatat barang yang dikembalikan pelanggan dan membalik nilai penjualan terkait.', 'is_active' => true],
     ['service_code' => 'SALES_DISCOUNT', 'service_name' => 'Diskon Penjualan', 'module_name' => 'SALES', 'description' => 'Mencatat potongan harga yang diberikan kepada pelanggan atas transaksi penjualan.', 'is_active' => true],
     ['service_code' => 'SALES_WRITE_OFF', 'service_name' => 'Penghapusan Piutang Penjualan', 'module_name' => 'SALES', 'description' => 'Mencatat saldo terkait penjualan yang harus dihapus sesuai persetujuan kebijakan.', 'is_active' => true],
@@ -43,6 +45,7 @@ return [
 
     ['service_code' => 'TAX_OUTPUT', 'service_name' => 'Pajak Keluaran', 'module_name' => 'TAX', 'description' => 'Mencatat pajak keluaran yang timbul dari transaksi penjualan kena pajak.', 'is_active' => true],
     ['service_code' => 'TAX_INPUT', 'service_name' => 'Pajak Masukan', 'module_name' => 'TAX', 'description' => 'Mencatat pajak masukan yang timbul dari pembelian atau beban kena pajak.', 'is_active' => true],
+    ['service_code' => 'VAT_PAYMENT', 'service_name' => 'Pembayaran PPN', 'module_name' => 'TAX', 'description' => 'Mencatat pelunasan hutang PPN keluaran kepada pemerintah.', 'is_active' => true],
     ['service_code' => 'TAX_PAYMENT', 'service_name' => 'Pembayaran Pajak', 'module_name' => 'TAX', 'description' => 'Mencatat pelunasan kewajiban pajak kepada otoritas pajak.', 'is_active' => true],
 
     ['service_code' => 'MONTH_END_CLOSING', 'service_name' => 'Tutup Buku Bulan', 'module_name' => 'CLOSING', 'description' => 'Mencatat penyesuaian dan pemindahan yang diperlukan saat tutup buku bulanan.', 'is_active' => true],

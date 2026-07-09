@@ -11,6 +11,7 @@ class ServiceCatalog
     {
         return array_merge(
             $this->sales(),
+            $this->salesVat(),
             $this->purchase(),
             $this->inventory(),
             $this->finance(),
@@ -32,6 +33,14 @@ class ServiceCatalog
             $this->definition(AccountingServiceCode::SALES_RETURN, 'Sales Return', 'SALES', 'Records goods returned by customers and reverses related sales value.'),
             $this->definition(AccountingServiceCode::SALES_DISCOUNT, 'Sales Discount', 'SALES', 'Records discounts granted to customers on completed sales transactions.'),
             $this->definition(AccountingServiceCode::SALES_WRITE_OFF, 'Sales Write Off', 'SALES', 'Records sales-related balances that must be written off based on policy approval.'),
+        ];
+    }
+
+    public function salesVat(): array
+    {
+        return [
+            $this->definition(AccountingServiceCode::SALES_CASH_VAT, 'Cash Sales with VAT 11%', 'SALES', 'Records cash sales that include output VAT at 11%, recognize cost of goods sold, and reduce inventory.'),
+            $this->definition(AccountingServiceCode::SALES_CREDIT_VAT, 'Credit Sales with VAT 11%', 'SALES', 'Records credit sales that include output VAT at 11%, recognize receivables, cost of goods sold, and inventory reduction.'),
         ];
     }
 
@@ -114,6 +123,7 @@ class ServiceCatalog
         return [
             $this->definition(AccountingServiceCode::TAX_OUTPUT, 'Tax Output', 'TAX', 'Records output tax generated from taxable sales transactions.'),
             $this->definition(AccountingServiceCode::TAX_INPUT, 'Tax Input', 'TAX', 'Records input tax generated from taxable purchases or expenses.'),
+            $this->definition(AccountingServiceCode::VAT_PAYMENT, 'VAT Payment', 'TAX', 'Records settlement of output VAT payable to tax authorities.'),
             $this->definition(AccountingServiceCode::TAX_PAYMENT, 'Tax Payment', 'TAX', 'Records settlement of tax liabilities to tax authorities.'),
         ];
     }

@@ -6,6 +6,8 @@ enum AccountingServiceCode: string
 {
     case SALES_CASH = 'SALES_CASH';
     case SALES_CREDIT = 'SALES_CREDIT';
+    case SALES_CASH_VAT = 'SALES_CASH_VAT';
+    case SALES_CREDIT_VAT = 'SALES_CREDIT_VAT';
     case SALES_RETURN = 'SALES_RETURN';
     case SALES_DISCOUNT = 'SALES_DISCOUNT';
     case SALES_WRITE_OFF = 'SALES_WRITE_OFF';
@@ -46,6 +48,7 @@ enum AccountingServiceCode: string
 
     case TAX_OUTPUT = 'TAX_OUTPUT';
     case TAX_INPUT = 'TAX_INPUT';
+    case VAT_PAYMENT = 'VAT_PAYMENT';
     case TAX_PAYMENT = 'TAX_PAYMENT';
 
     case MONTH_END_CLOSING = 'MONTH_END_CLOSING';

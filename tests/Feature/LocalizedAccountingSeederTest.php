@@ -36,6 +36,11 @@ class LocalizedAccountingSeederTest extends TestCase
         $this->assertSame('Kas', Account::where('code', '1000')->value('name'));
         $this->assertSame('Penjualan Tunai', Service::where('service_code', 'SALES_CASH')->value('service_name'));
         $this->assertSame('Penjualan Tunai - Kas/Bank', ServiceAccount::where('mapping_key', 'sales_cash_cash_d')->value('mapping_name'));
+        $this->assertSame('Penjualan Tunai PPN 11%', Service::where('service_code', 'SALES_CASH_VAT')->value('service_name'));
+        $this->assertSame('Penjualan Kredit PPN 11%', Service::where('service_code', 'SALES_CREDIT_VAT')->value('service_name'));
+        $this->assertSame('Pembayaran PPN', Service::where('service_code', 'VAT_PAYMENT')->value('service_name'));
+        $this->assertSame('Penjualan Tunai PPN 11% - Harga Pokok Penjualan', ServiceAccount::where('mapping_key', 'sales_cash_vat_cogs_d')->value('mapping_name'));
+        $this->assertSame('Penjualan Kredit PPN 11% - Harga Pokok Penjualan', ServiceAccount::where('mapping_key', 'sales_credit_vat_cogs_d')->value('mapping_name'));
         $cashAccountId = Account::where('code', '1000')->value('id');
         $this->assertSame('Aset', ReportMapping::where('account_id', $cashAccountId)->value('report_group'));
     }
@@ -53,6 +58,11 @@ class LocalizedAccountingSeederTest extends TestCase
         $this->assertSame('Cash', Account::where('code', '1000')->value('name'));
         $this->assertSame('Cash Sales', Service::where('service_code', 'SALES_CASH')->value('service_name'));
         $this->assertSame('Cash Sales - Cash/Bank', ServiceAccount::where('mapping_key', 'sales_cash_cash_d')->value('mapping_name'));
+        $this->assertSame('Cash Sales with VAT 11%', Service::where('service_code', 'SALES_CASH_VAT')->value('service_name'));
+        $this->assertSame('Credit Sales with VAT 11%', Service::where('service_code', 'SALES_CREDIT_VAT')->value('service_name'));
+        $this->assertSame('VAT Payment', Service::where('service_code', 'VAT_PAYMENT')->value('service_name'));
+        $this->assertSame('Cash Sales with VAT 11% - Cost Of Goods Sold', ServiceAccount::where('mapping_key', 'sales_cash_vat_cogs_d')->value('mapping_name'));
+        $this->assertSame('Credit Sales with VAT 11% - Cost Of Goods Sold', ServiceAccount::where('mapping_key', 'sales_credit_vat_cogs_d')->value('mapping_name'));
         $cashAccountId = Account::where('code', '1000')->value('id');
         $this->assertSame('Asset', ReportMapping::where('account_id', $cashAccountId)->value('report_group'));
     }

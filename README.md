@@ -310,7 +310,7 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 
 | Module | Service Codes |
 | --- | --- |
-| SALES | `SALES_CASH`, `SALES_CREDIT`, `SALES_RETURN`, `SALES_DISCOUNT`, `SALES_WRITE_OFF` |
+| SALES | `SALES_CASH`, `SALES_CASH_VAT`, `SALES_CREDIT`, `SALES_CREDIT_VAT`, `SALES_RETURN`, `SALES_DISCOUNT`, `SALES_WRITE_OFF` |
 | PURCHASE | `PURCHASE_CASH`, `PURCHASE_CREDIT`, `PURCHASE_RETURN` |
 | INVENTORY | `STOCK_OPENING`, `STOCK_ADJUSTMENT_PLUS`, `STOCK_ADJUSTMENT_MINUS`, `STOCK_TRANSFER`, `STOCK_OPNAME_GAIN`, `STOCK_OPNAME_LOSS` |
 | FINANCE | `CASH_IN`, `CASH_OUT`, `BANK_TRANSFER`, `JOURNAL_MANUAL`, `PETTY_CASH` |
@@ -319,7 +319,7 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 | ASSET | `ASSET_PURCHASE`, `ASSET_DEPRECIATION`, `ASSET_DISPOSAL`, `ASSET_REVALUATION` |
 | ACCOUNT_RECEIVABLE | `CUSTOMER_RECEIVABLE_PAYMENT`, `CUSTOMER_RECEIVABLE_WRITE_OFF` |
 | ACCOUNT_PAYABLE | `VENDOR_PAYMENT`, `VENDOR_PAYABLE_WRITE_OFF` |
-| TAX | `TAX_OUTPUT`, `TAX_INPUT`, `TAX_PAYMENT` |
+| TAX | `TAX_OUTPUT`, `TAX_INPUT`, `VAT_PAYMENT`, `TAX_PAYMENT` |
 | CLOSING | `MONTH_END_CLOSING`, `YEAR_END_CLOSING` |
 
 ### Purpose of each service
@@ -327,7 +327,9 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 | Service Code | Purpose |
 | --- | --- |
 | `SALES_CASH` | Cash sales recognized immediately without creating receivables. |
+| `SALES_CASH_VAT` | Cash sales with output VAT recognition and VAT payable. |
 | `SALES_CREDIT` | Sales invoices that create customer receivables. |
+| `SALES_CREDIT_VAT` | Credit sales with output VAT recognition and VAT payable. |
 | `SALES_RETURN` | Reversals for goods returned by customers. |
 | `SALES_DISCOUNT` | Discounts granted on sales transactions. |
 | `SALES_WRITE_OFF` | Sales-related balances written off after approval. |
@@ -359,13 +361,14 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 | `VENDOR_PAYABLE_WRITE_OFF` | Write-off of payable balances after reconciliation. |
 | `TAX_OUTPUT` | Output tax recognition from taxable sales. |
 | `TAX_INPUT` | Input tax recognition from taxable purchases or expenses. |
+| `VAT_PAYMENT` | Settlement of output VAT payable to the tax authority. |
 | `TAX_PAYMENT` | Settlement of tax liabilities. |
 | `MONTH_END_CLOSING` | Month-end adjustment and closing entries. |
 | `YEAR_END_CLOSING` | Year-end closing and retained earnings transfer. |
 
 ### Service catalog registry
 
-[`ServiceCatalog`](./src/Support/ServiceCatalog.php) is the central registry for default services. It groups services by module through `all()`, `sales()`, `purchase()`, `inventory()`, `finance()`, `expense()`, `payroll()`, `asset()`, `receivable()`, `payable()`, `tax()`, and `closing()`.
+[`ServiceCatalog`](./src/Support/ServiceCatalog.php) is the central registry for default services. It groups services by module through `all()`, `sales()`, `purchase()`, `inventory()`, `finance()`, `expense()`, `payroll()`, `asset()`, `receivable()`, `payable()`, `tax()`, and `closing()`. The sales module now includes VAT-aware entries, and the tax module includes a dedicated VAT payment service.
 
 ## Default ERP Journal Templates
 
@@ -411,7 +414,9 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 | Service Code | Default Mappings | Dynamic |
 | --- | --- | --- |
 | `SALES_CASH` | `sales_cash_cash_d`, `sales_cash_sales_k`, `sales_cash_cogs_d`, `sales_cash_inventory_k` | Cash/Bank |
+| `SALES_CASH_VAT` | `sales_cash_vat_cash_d`, `sales_cash_vat_sales_k`, `sales_cash_vat_vat_k`, `sales_cash_vat_cogs_d`, `sales_cash_vat_inventory_k` | Cash/Bank |
 | `SALES_CREDIT` | `sales_credit_ar_d`, `sales_credit_sales_k`, `sales_credit_cogs_d`, `sales_credit_inventory_k` | No |
+| `SALES_CREDIT_VAT` | `sales_credit_vat_ar_d`, `sales_credit_vat_sales_k`, `sales_credit_vat_vat_k`, `sales_credit_vat_cogs_d`, `sales_credit_vat_inventory_k` | No |
 | `SALES_RETURN` | `sales_return_sales_return_d`, `sales_return_receivable_k`, `sales_return_inventory_d`, `sales_return_cogs_k` | Receivable/Cash |
 | `SALES_DISCOUNT` | `sales_discount_discount_d`, `sales_discount_receivable_k` | Receivable/Cash |
 | `SALES_WRITE_OFF` | `sales_writeoff_bad_debt_d`, `sales_writeoff_ar_k` | No |
@@ -443,6 +448,7 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 | `VENDOR_PAYABLE_WRITE_OFF` | `vendor_writeoff_ap_d`, `vendor_writeoff_income_k` | No |
 | `TAX_OUTPUT` | `tax_output_receivable_d`, `tax_output_vat_k` | Cash/Receivable |
 | `TAX_INPUT` | `tax_input_vat_d`, `tax_input_payable_k` | Cash/AP |
+| `VAT_PAYMENT` | `vat_payment_vat_d`, `vat_payment_cash_k` | Cash/Bank |
 | `TAX_PAYMENT` | `tax_payment_payable_d`, `tax_payment_cash_k` | Cash/Bank |
 | `MONTH_END_CLOSING` | `month_closing_revenue_d`, `month_closing_income_summary_k`, `month_closing_income_summary_d`, `month_closing_expense_k` | Revenue Accounts, Expense Accounts |
 | `YEAR_END_CLOSING` | `year_closing_income_summary_d`, `year_closing_retained_earnings_k` | No |
