@@ -3,8 +3,9 @@
 namespace ESolution\LaravelAccounting\Models;
 
 use ESolution\LaravelAccounting\Enums\ReportType;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class ReportMapping extends AccountingModel
+class ReportMapping extends MasterDataModel
 {
     protected string $baseTable = 'report_mappings';
 
@@ -22,4 +23,8 @@ class ReportMapping extends AccountingModel
         'is_active' => 'boolean',
     ];
 
+    public function account(): BelongsTo
+    {
+        return $this->belongsTo(Account::class, 'account_id');
+    }
 }

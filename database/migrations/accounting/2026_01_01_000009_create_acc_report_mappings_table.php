@@ -1,17 +1,25 @@
 <?php
 
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Traits\HandlesMasterConnection;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    use HandlesMasterConnection;
+
     public function up()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
+        $table = $tablePrefix.'report_mappings';
         $resolver = app(AccountingConnectionResolver::class);
-        Schema::create($tablePrefix.'report_mappings', function (Blueprint $blueprint) use ($tablePrefix, $resolver) {
+
+        if ($this->tableExists($table)) {
+            return;
+        }
+
+        $this->schema()->create($table, function (Blueprint $blueprint) use ($tablePrefix, $resolver) {
             $blueprint->uuid('id')->primary();
             $blueprint->uuid('account_id');
             $blueprint->string('report_type', 50);
@@ -35,6 +43,6 @@ return new class extends Migration
     public function down()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
-        Schema::dropIfExists($tablePrefix.'report_mappings');
+        $this->schema()->dropIfExists($tablePrefix.'report_mappings');
     }
 };

@@ -13,6 +13,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Default Master Language
+    |--------------------------------------------------------------------------
+    |
+    | Controls which localized master data seed set is used by the package.
+    | Supported values: id, en
+    |
+    */
+    'default_language' => env('ACCOUNTING_DEFAULT_LANGUAGE', 'id'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Master Data Connection
     |--------------------------------------------------------------------------
     |

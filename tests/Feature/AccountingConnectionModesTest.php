@@ -7,6 +7,7 @@ use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
 use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\JournalEntryDetail;
+use ESolution\LaravelAccounting\Models\ReportMapping;
 use ESolution\LaravelAccounting\Models\Service;
 use ESolution\LaravelAccounting\Models\ServiceAccount;
 use ESolution\LaravelAccounting\Repositories\JournalRepository;
@@ -232,6 +233,22 @@ class AccountingConnectionModesTest extends TestCase
 
         $this->assertTrue(Schema::connection('master')->hasTable('acc_account_categories'));
         $this->assertFalse(Schema::connection('tenant')->hasTable('acc_account_categories'));
+
+        $migration->down();
+    }
+
+    public function test_report_mapping_migration_uses_master_connection_when_shared_database_is_enabled(): void
+    {
+        $this->useTenantWithSharedMasterMode();
+        $this->createEmptyConnection('master');
+        $this->createEmptyConnection('tenant');
+
+        $migration = require dirname(__DIR__, 2).'/database/migrations/accounting/2026_01_01_000009_create_acc_report_mappings_table.php';
+        $migration->up();
+
+        $this->assertSame('master.acc_report_mappings', ReportMapping::validationTable());
+        $this->assertTrue(Schema::connection('master')->hasTable('acc_report_mappings'));
+        $this->assertFalse(Schema::connection('tenant')->hasTable('acc_report_mappings'));
 
         $migration->down();
     }

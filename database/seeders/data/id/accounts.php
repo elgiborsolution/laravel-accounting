@@ -1,0 +1,97 @@
+<?php
+
+return [
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1000', 'name' => 'Kas', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1001', 'name' => 'Kas / Bank', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1002', 'name' => 'Transfer Bank', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1003', 'name' => 'Kas Kecil', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1010', 'name' => 'Bank BCA', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1011', 'name' => 'Bank Mandiri', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1012', 'name' => 'Bank BNI', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1020', 'name' => 'Dompet Digital', 'is_postable' => true],
+
+    ['category_code' => 'ACCOUNT_RECEIVABLE', 'code' => '1031', 'name' => 'Piutang Karyawan', 'is_postable' => true],
+    ['category_code' => 'ACCOUNT_RECEIVABLE', 'code' => '1101', 'name' => 'Piutang Usaha', 'is_postable' => true],
+
+    ['category_code' => 'INVENTORY', 'code' => '1041', 'name' => 'Persediaan Konsinyasi', 'is_postable' => true],
+    ['category_code' => 'INVENTORY', 'code' => '1201', 'name' => 'Persediaan', 'is_postable' => true],
+    ['category_code' => 'INVENTORY', 'code' => '1090', 'name' => 'Persediaan Dalam Perjalanan', 'is_postable' => true],
+
+    ['category_code' => 'PREPAID_EXPENSE', 'code' => '1050', 'name' => 'Uang Muka Pembelian', 'is_postable' => true],
+    ['category_code' => 'PREPAID_EXPENSE', 'code' => '1060', 'name' => 'Pajak Dibayar Dimuka', 'is_postable' => true],
+    ['category_code' => 'PREPAID_EXPENSE', 'code' => '1080', 'name' => 'Deposit', 'is_postable' => true],
+    ['category_code' => 'PREPAID_EXPENSE', 'code' => '1301', 'name' => 'Beban Dibayar Dimuka', 'is_postable' => true],
+
+    ['category_code' => 'FIXED_ASSET', 'code' => '1200', 'name' => 'Tanah', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1210', 'name' => 'Bangunan', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1220', 'name' => 'Kendaraan', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1230', 'name' => 'Peralatan Kantor', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1240', 'name' => 'Mesin', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1251', 'name' => 'Akumulasi Penyusutan Kendaraan', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1252', 'name' => 'Akumulasi Penyusutan Peralatan', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1501', 'name' => 'Aset Tetap', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1502', 'name' => 'Akumulasi Penyusutan', 'is_postable' => true],
+
+    ['category_code' => 'OTHER_ASSET', 'code' => '1601', 'name' => 'PPN Masukan', 'is_postable' => true],
+
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2000', 'name' => 'Hutang Dagang', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2001', 'name' => 'Hutang Usaha', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2010', 'name' => 'Hutang Pajak', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2030', 'name' => 'Hutang Operasional', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2040', 'name' => 'Hutang Jangka Pendek', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2050', 'name' => 'Uang Muka Penjualan', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2060', 'name' => 'Titipan Pelanggan', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2101', 'name' => 'Gaji Terutang', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2201', 'name' => 'Utang Pajak', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2301', 'name' => 'PPN Keluaran', 'is_postable' => true],
+
+    ['category_code' => 'LONG_TERM_LIABILITY', 'code' => '2200', 'name' => 'Hutang Bank', 'is_postable' => true],
+    ['category_code' => 'LONG_TERM_LIABILITY', 'code' => '2210', 'name' => 'Hutang Leasing', 'is_postable' => true],
+    ['category_code' => 'LONG_TERM_LIABILITY', 'code' => '2220', 'name' => 'Hutang Jangka Panjang', 'is_postable' => true],
+
+    ['category_code' => 'EQUITY', 'code' => '3000', 'name' => 'Modal Pemilik', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3001', 'name' => 'Ekuitas Saldo Awal', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3020', 'name' => 'Prive', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3030', 'name' => 'Saldo Laba Tahun Berjalan', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3101', 'name' => 'Laba Ditahan', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3201', 'name' => 'Cadangan Revaluasi', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3301', 'name' => 'Ikhtisar Laba Rugi', 'is_postable' => true],
+
+    ['category_code' => 'SALES_REVENUE', 'code' => '4000', 'name' => 'Penjualan', 'is_postable' => true],
+    ['category_code' => 'SALES_REVENUE', 'code' => '4001', 'name' => 'Pendapatan Penjualan', 'is_postable' => true],
+    ['category_code' => 'SALES_REVENUE', 'code' => '4010', 'name' => 'Penjualan Konsinyasi', 'is_postable' => true],
+
+    ['category_code' => 'SERVICE_REVENUE', 'code' => '4020', 'name' => 'Pendapatan Jasa', 'is_postable' => true],
+
+    ['category_code' => 'OTHER_REVENUE', 'code' => '4030', 'name' => 'Pendapatan Lain-lain', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '4040', 'name' => 'Pendapatan Bunga', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '4101', 'name' => 'Pendapatan Lain', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '4201', 'name' => 'Keuntungan Persediaan', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '5601', 'name' => 'Diskon Penjualan', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '5701', 'name' => 'Retur Penjualan', 'is_postable' => true],
+
+    ['category_code' => 'COST_OF_GOODS_SOLD', 'code' => '5000', 'name' => 'Harga Pokok Penjualan', 'is_postable' => true],
+    ['category_code' => 'COST_OF_GOODS_SOLD', 'code' => '5001', 'name' => 'Harga Pokok Penjualan', 'is_postable' => true],
+
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5101', 'name' => 'Beban Gaji', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5110', 'name' => 'Beban Listrik', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5120', 'name' => 'Beban Air', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5130', 'name' => 'Beban Internet', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5140', 'name' => 'Beban Telepon', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5150', 'name' => 'Beban Sewa', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5160', 'name' => 'Beban Transportasi', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5170', 'name' => 'Beban Konsumsi', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5180', 'name' => 'Beban Perlengkapan', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5190', 'name' => 'Beban Administrasi Bank', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5201', 'name' => 'Beban Operasional', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5210', 'name' => 'Beban Pajak', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5220', 'name' => 'Beban Pemasaran', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5230', 'name' => 'Beban Operasional Lainnya', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5401', 'name' => 'Beban Penyusutan', 'is_postable' => true],
+
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5300', 'name' => 'Beban Bunga', 'is_postable' => true],
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5301', 'name' => 'Kerugian Persediaan', 'is_postable' => true],
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5310', 'name' => 'Kerugian Selisih Kurs', 'is_postable' => true],
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5320', 'name' => 'Kerugian Lain-lain', 'is_postable' => true],
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5501', 'name' => 'Beban Piutang Tak Tertagih', 'is_postable' => true],
+];

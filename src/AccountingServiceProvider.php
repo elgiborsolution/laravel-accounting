@@ -42,7 +42,12 @@ class AccountingServiceProvider extends ServiceProvider
         $this->app->singleton(AccountRepository::class, fn () => new AccountRepository);
         $this->app->singleton(ServiceRepository::class, fn () => new ServiceRepository);
         $this->app->singleton(ServiceAccountRepository::class, fn () => new ServiceAccountRepository);
-        $this->app->singleton(JournalRepository::class, fn () => new JournalRepository);
+        $this->app->singleton(JournalRepository::class, function ($app) {
+            return new JournalRepository(
+                $app->make(AccountRepository::class),
+                $app->make(ServiceRepository::class)
+            );
+        });
         $this->app->singleton(FiscalPeriodRepository::class, fn () => new FiscalPeriodRepository);
 
         $this->app->singleton(ServiceAccountTemplateRegistry::class, function ($app) {
