@@ -5,6 +5,7 @@ namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
+use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -19,17 +20,30 @@ class AccountController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $search = $request->query('search');
-        $cacheKey = 'index_'.($search ? 'search_'.md5($search) : 'all');
+        $with = $this->normalizeWithParameter($request->query('with'));
+        $includeCategory = $with === 'category';
+        $includeTreeCategory = $with === 'tree_category';
+        $cacheKey = 'index_'
+            .($search ? 'search_'.md5($search) : 'all')
+            .'_with_'.($with ?? 'none');
 
-        $accounts = Cache::tags($this->getCacheTags($tenantId))->rememberForever($cacheKey, function () use ($search) {
+        $accounts = Cache::tags($this->getCacheTags($tenantId))->rememberForever($cacheKey, function () use ($search, $includeCategory, $includeTreeCategory) {
             $data = Account::when($search, function ($query, $search) {
                 $query->where('code', 'like', "%{$search}%")
                     ->orWhere('name', 'like', "%{$search}%");
-            })
+                })
                 ->orderBy('code')
                 ->get();
 
-            return app(AccountRepository::class)->attachCategories($data);
+            if ($includeTreeCategory) {
+                return $this->attachTreeCategories($data);
+            }
+
+            if ($includeCategory) {
+                return app(AccountRepository::class)->attachCategories($data);
+            }
+
+            return $data;
         });
 
         return $this->successResponse('Accounts retrieved successfully', $accounts);
@@ -130,5 +144,59 @@ class AccountController extends BaseController
     {
         Cache::tags($this->getCacheTags($tenantId))->flush();
         Cache::tags(array_merge(['acc_account_categories'], $tenantId ? ['acc_account_categories_tenant_'.$tenantId] : []))->flush();
+    }
+
+    protected function normalizeWithParameter(mixed $with): ?string
+    {
+        if (is_array($with)) {
+            $values = [];
+
+            foreach ($with as $value) {
+                if (is_array($value)) {
+                    foreach ($value as $nested) {
+                        $values[] = trim((string) $nested);
+                    }
+
+                    continue;
+                }
+
+                foreach (explode(',', (string) $value) as $part) {
+                    $values[] = trim($part);
+                }
+            }
+
+            $with = $values;
+        } elseif (is_string($with)) {
+            $with = array_map('trim', explode(',', $with));
+        } else {
+            return null;
+        }
+
+        $with = array_values(array_filter($with, fn ($item) => $item !== ''));
+
+        if (count($with) !== 1) {
+            return null;
+        }
+
+        return in_array($with[0], ['category', 'tree_category'], true) ? $with[0] : null;
+    }
+
+    protected function attachTreeCategories($accounts)
+    {
+        $categoryRepository = app(AccountCategoryRepository::class);
+        $categoriesById = $categoryRepository->allOrdered()->keyBy('id');
+
+        return $accounts->map(function (Account $account) use ($categoriesById, $categoryRepository) {
+            $category = $categoriesById->get($account->category_id);
+
+            if (! $category) {
+                return $account;
+            }
+
+            $category->setRelation('tree_category', $categoryRepository->buildLineage($category));
+            $account->setRelation('tree_category', $category->getRelation('tree_category'));
+
+            return $account;
+        });
     }
 }

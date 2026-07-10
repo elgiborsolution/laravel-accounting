@@ -28,6 +28,38 @@ class AccountControllerTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonPath('data.0.code', '1001');
+        $response->assertJsonMissingPath('data.0.category');
+        $response->assertJsonMissingPath('data.0.tree_category');
+    }
+
+    public function test_can_list_accounts_with_category(): void
+    {
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();
+        $account = Account::factory()->create(['category_id' => $category->id, 'code' => '1003', 'name' => 'Receivable']);
+
+        $response = $this->getJson('/api/accounting/accounts?with=category');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $account->id)
+            ->assertJsonPath('data.0.category.id', $category->id)
+            ->assertJsonPath('data.0.category.category_code', 'CASH_CASH_EQUIVALENT');
+    }
+
+    public function test_can_list_accounts_with_tree_category(): void
+    {
+        $root = AccountCategory::where('category_code', 'ASSET')->firstOrFail();
+        $parent = AccountCategory::where('category_code', 'CURRENT_ASSET')->firstOrFail();
+        $leaf = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
+
+        $account = Account::factory()->create(['category_id' => $leaf->id, 'code' => '1004', 'name' => 'Cash Tree']);
+
+        $response = $this->getJson('/api/accounting/accounts?with=tree_category');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $account->id)
+            ->assertJsonPath('data.0.tree_category.0.id', $root->id)
+            ->assertJsonPath('data.0.tree_category.1.id', $parent->id)
+            ->assertJsonPath('data.0.tree_category.2.id', $leaf->id);
     }
 
     public function test_can_create_account()
