@@ -13,6 +13,31 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Default Master Language
+    |--------------------------------------------------------------------------
+    |
+    | Controls which localized master data seed set is used by the package.
+    | Supported values: id, en
+    |
+    */
+    'default_language' => env('ACCOUNTING_DEFAULT_LANGUAGE', 'id'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Master Data Connection
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, master data tables will use the configured shared
+    | connection instead of the application's current default connection.
+    |
+    */
+    'master_data' => [
+        'use_shared_database' => env('ACCOUNTING_USE_SHARED_DATABASE', false),
+        'connection' => env('ACCOUNTING_MASTER_CONNECTION'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Journal Settings
     |--------------------------------------------------------------------------
     |

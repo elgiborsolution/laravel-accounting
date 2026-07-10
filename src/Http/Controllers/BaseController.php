@@ -3,6 +3,8 @@
 namespace ESolution\LaravelAccounting\Http\Controllers;
 
 use ESolution\LaravelAccounting\Traits\ApiResponse;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 
 abstract class BaseController extends Controller
@@ -13,7 +15,9 @@ abstract class BaseController extends Controller
 
     protected function initializeTenantIfNeeded($tenantId = null): ?object
     {
-        if (! $tenantId) {
+        $tenantIdentifier = $this->resolveTenantIdentifier($tenantId);
+
+        if (! $tenantIdentifier) {
             return null;
         }
 
@@ -29,7 +33,7 @@ abstract class BaseController extends Controller
                 return null;
             }
 
-            $tenant = $tenantModel::find($tenantId);
+            $tenant = $this->findTenantModel($tenantModel, $tenantIdentifier);
 
             if (! $tenant) {
                 return null;
@@ -44,6 +48,52 @@ abstract class BaseController extends Controller
 
             return null;
         }
+    }
+
+    protected function resolveTenantIdentifier($tenantId = null): ?string
+    {
+        if ($tenantId !== null && $tenantId !== '') {
+            return (string) $tenantId;
+        }
+
+        $request = request();
+        if (! $request instanceof Request) {
+            return null;
+        }
+
+        $headerTenant = $request->header('X-Tenant');
+        if ($headerTenant !== null && $headerTenant !== '') {
+            return (string) $headerTenant;
+        }
+
+        $routeTenant = $request->route('tenantId');
+        if ($routeTenant !== null && $routeTenant !== '') {
+            return (string) $routeTenant;
+        }
+
+        return null;
+    }
+
+    protected function findTenantModel(string $tenantModel, string $tenantIdentifier): ?Model
+    {
+        $instance = new $tenantModel;
+
+        if ($tenantIdentifier !== '') {
+            $tenant = $tenantModel::query()->find($tenantIdentifier);
+            if ($tenant) {
+                return $tenant;
+            }
+        }
+
+        if (method_exists($instance, 'getRouteKeyName')) {
+            $routeKey = $instance->getRouteKeyName();
+            $tenant = $tenantModel::query()->where($routeKey, $tenantIdentifier)->first();
+            if ($tenant) {
+                return $tenant;
+            }
+        }
+
+        return null;
     }
 
     protected function getCacheTags($tenantId = null): array

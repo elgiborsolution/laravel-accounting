@@ -1,15 +1,25 @@
 <?php
 
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Traits\HandlesMasterConnection;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    use HandlesMasterConnection;
+
     public function up()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
-        Schema::create($tablePrefix.'report_mappings', function (Blueprint $blueprint) use ($tablePrefix) {
+        $table = $tablePrefix.'report_mappings';
+        $resolver = app(AccountingConnectionResolver::class);
+
+        if ($this->tableExists($table)) {
+            return;
+        }
+
+        $this->schema()->create($table, function (Blueprint $blueprint) use ($tablePrefix, $resolver) {
             $blueprint->uuid('id')->primary();
             $blueprint->uuid('account_id');
             $blueprint->string('report_type', 50);
@@ -21,19 +31,18 @@ return new class extends Migration
 
             $blueprint->index('account_id');
             $blueprint->index('report_type');
-        });
-
-        Schema::table($tablePrefix.'report_mappings', function (Blueprint $blueprint) use ($tablePrefix) {
-            $blueprint->foreign('account_id')
-                ->references('id')
-                ->on($tablePrefix.'accounts')
-                ->cascadeOnDelete();
+            if ($resolver->shouldCreateCrossConnectionForeignKeys()) {
+                $blueprint->foreign('account_id')
+                    ->references('id')
+                    ->on($tablePrefix.'accounts')
+                    ->cascadeOnDelete();
+            }
         });
     }
 
     public function down()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
-        Schema::dropIfExists($tablePrefix.'report_mappings');
+        $this->schema()->dropIfExists($tablePrefix.'report_mappings');
     }
 };

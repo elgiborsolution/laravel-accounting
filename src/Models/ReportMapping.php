@@ -3,11 +3,11 @@
 namespace ESolution\LaravelAccounting\Models;
 
 use ESolution\LaravelAccounting\Enums\ReportType;
-use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class ReportMapping extends Model
+class ReportMapping extends MasterDataModel
 {
-    use HasUuid;
+    protected string $baseTable = 'report_mappings';
 
     protected $fillable = [
         'account_id',
@@ -23,12 +23,7 @@ class ReportMapping extends Model
         'is_active' => 'boolean',
     ];
 
-    public function getTable()
-    {
-        return config('accounting.table_prefix', 'acc_').'report_mappings';
-    }
-
-    public function account()
+    public function account(): BelongsTo
     {
         return $this->belongsTo(Account::class, 'account_id');
     }

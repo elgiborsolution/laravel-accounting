@@ -2,13 +2,15 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
+use Illuminate\Support\Collection;
 
-class AccountCategory extends Model
+class AccountCategory extends MasterDataModel
 {
-    use HasUuid;
+    protected string $baseTable = 'account_categories';
 
     protected $fillable = [
+        'parent_id',
         'type',
         'category_code',
         'category_name',
@@ -21,13 +23,38 @@ class AccountCategory extends Model
         'status' => 'boolean',
     ];
 
-    public function getTable()
+    public function setTypeAttribute($value)
     {
-        return config('accounting.table_prefix', 'acc_').'account_categories';
+        $this->attributes['type'] = strtolower((string) $value);
+    }
+
+    public function getTypeAttribute($value)
+    {
+        return $value ? strtoupper($value) : $value;
+    }
+
+    public function parent()
+    {
+        return $this->belongsTo(self::class, 'parent_id');
+    }
+
+    public function children()
+    {
+        return $this->hasMany(self::class, 'parent_id')->orderBy('sequence_no')->orderBy('category_name');
     }
 
     public function accounts()
     {
-        return $this->hasMany(Account::class, 'category_id');
+        return $this->hasMany(Account::class, 'category_id')->orderBy('code');
+    }
+
+    public function descendantCategories(): Collection
+    {
+        return app(AccountCategoryRepository::class)->getDescendants($this);
+    }
+
+    public function lineage(): Collection
+    {
+        return app(AccountCategoryRepository::class)->buildLineage($this);
     }
 }

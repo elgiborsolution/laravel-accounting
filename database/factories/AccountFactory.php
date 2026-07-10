@@ -14,7 +14,6 @@ class AccountFactory extends Factory
         return [
             'code' => $this->faker->unique()->numerify('####'),
             'name' => $this->faker->word,
-            'level' => 1,
             'is_postable' => true,
             'status' => true,
         ];

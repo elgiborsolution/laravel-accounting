@@ -3,20 +3,21 @@
 namespace ESolution\LaravelAccounting\Services;
 
 use ESolution\LaravelAccounting\Models\Account;
-use ESolution\LaravelAccounting\Models\AccountCategory;
 
 class CoaService
 {
+    public function __construct(protected AccountCategoryTreeService $treeService) {}
+
     public function createAccount(array $data)
     {
+        unset($data['parent_id'], $data['level']);
+
         return Account::create($data);
     }
 
     public function getTree()
     {
-        return AccountCategory::with(['accounts' => function ($query) {
-            $query->whereNull('parent_id')->with('children');
-        }])->get();
+        return $this->treeService->getTree();
     }
 
     public function activateAccount($id)

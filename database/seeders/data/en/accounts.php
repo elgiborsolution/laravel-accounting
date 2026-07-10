@@ -1,0 +1,97 @@
+<?php
+
+return [
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1000', 'name' => 'Cash', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1001', 'name' => 'Cash / Bank', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1002', 'name' => 'Bank Transfer', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1003', 'name' => 'Petty Cash', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1010', 'name' => 'BCA Bank', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1011', 'name' => 'Mandiri Bank', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1012', 'name' => 'BNI Bank', 'is_postable' => true],
+    ['category_code' => 'CASH_CASH_EQUIVALENT', 'code' => '1020', 'name' => 'E-Wallet', 'is_postable' => true],
+
+    ['category_code' => 'ACCOUNT_RECEIVABLE', 'code' => '1031', 'name' => 'Employee Receivable', 'is_postable' => true],
+    ['category_code' => 'ACCOUNT_RECEIVABLE', 'code' => '1101', 'name' => 'Accounts Receivable', 'is_postable' => true],
+
+    ['category_code' => 'INVENTORY', 'code' => '1041', 'name' => 'Consignment Inventory', 'is_postable' => true],
+    ['category_code' => 'INVENTORY', 'code' => '1201', 'name' => 'Inventory', 'is_postable' => true],
+    ['category_code' => 'INVENTORY', 'code' => '1090', 'name' => 'Inventory In Transit', 'is_postable' => true],
+
+    ['category_code' => 'PREPAID_EXPENSE', 'code' => '1050', 'name' => 'Advance Purchase', 'is_postable' => true],
+    ['category_code' => 'PREPAID_EXPENSE', 'code' => '1060', 'name' => 'Prepaid Tax', 'is_postable' => true],
+    ['category_code' => 'PREPAID_EXPENSE', 'code' => '1080', 'name' => 'Deposit', 'is_postable' => true],
+    ['category_code' => 'PREPAID_EXPENSE', 'code' => '1301', 'name' => 'Prepaid Expense', 'is_postable' => true],
+
+    ['category_code' => 'FIXED_ASSET', 'code' => '1200', 'name' => 'Land', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1210', 'name' => 'Building', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1220', 'name' => 'Vehicle', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1230', 'name' => 'Office Equipment', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1240', 'name' => 'Machine', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1251', 'name' => 'Accumulated Depreciation - Vehicle', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1252', 'name' => 'Accumulated Depreciation - Equipment', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1501', 'name' => 'Fixed Asset', 'is_postable' => true],
+    ['category_code' => 'FIXED_ASSET', 'code' => '1502', 'name' => 'Accumulated Depreciation', 'is_postable' => true],
+
+    ['category_code' => 'OTHER_ASSET', 'code' => '1601', 'name' => 'Input VAT', 'is_postable' => true],
+
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2000', 'name' => 'Trade Payable', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2001', 'name' => 'Accounts Payable', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2010', 'name' => 'Tax Payable', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2030', 'name' => 'Operational Payable', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2040', 'name' => 'Short Term Liability', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2050', 'name' => 'Sales Advance', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2060', 'name' => 'Customer Deposit', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2101', 'name' => 'Salary Payable', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2201', 'name' => 'Tax Payable', 'is_postable' => true],
+    ['category_code' => 'CURRENT_LIABILITY', 'code' => '2301', 'name' => 'Output VAT', 'is_postable' => true],
+
+    ['category_code' => 'LONG_TERM_LIABILITY', 'code' => '2200', 'name' => 'Bank Loan', 'is_postable' => true],
+    ['category_code' => 'LONG_TERM_LIABILITY', 'code' => '2210', 'name' => 'Lease Payable', 'is_postable' => true],
+    ['category_code' => 'LONG_TERM_LIABILITY', 'code' => '2220', 'name' => 'Long Term Liability', 'is_postable' => true],
+
+    ['category_code' => 'EQUITY', 'code' => '3000', 'name' => 'Owner Capital', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3001', 'name' => 'Opening Balance Equity', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3020', 'name' => 'Owner Drawings', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3030', 'name' => 'Current Year Earnings', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3101', 'name' => 'Retained Earnings', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3201', 'name' => 'Revaluation Reserve', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3301', 'name' => 'Income Summary', 'is_postable' => true],
+
+    ['category_code' => 'SALES_REVENUE', 'code' => '4000', 'name' => 'Sales', 'is_postable' => true],
+    ['category_code' => 'SALES_REVENUE', 'code' => '4001', 'name' => 'Sales Revenue', 'is_postable' => true],
+    ['category_code' => 'SALES_REVENUE', 'code' => '4010', 'name' => 'Consignment Sales', 'is_postable' => true],
+
+    ['category_code' => 'SERVICE_REVENUE', 'code' => '4020', 'name' => 'Service Revenue', 'is_postable' => true],
+
+    ['category_code' => 'OTHER_REVENUE', 'code' => '4030', 'name' => 'Other Revenue', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '4040', 'name' => 'Interest Income', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '4101', 'name' => 'Other Income', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '4201', 'name' => 'Inventory Gain', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '5601', 'name' => 'Sales Discount', 'is_postable' => true],
+    ['category_code' => 'OTHER_REVENUE', 'code' => '5701', 'name' => 'Sales Return', 'is_postable' => true],
+
+    ['category_code' => 'COST_OF_GOODS_SOLD', 'code' => '5000', 'name' => 'Cost of Goods Sold', 'is_postable' => true],
+    ['category_code' => 'COST_OF_GOODS_SOLD', 'code' => '5001', 'name' => 'Cost of Goods Sold', 'is_postable' => true],
+
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5101', 'name' => 'Salary Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5110', 'name' => 'Electricity Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5120', 'name' => 'Water Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5130', 'name' => 'Internet Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5140', 'name' => 'Telephone Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5150', 'name' => 'Rent Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5160', 'name' => 'Transportation Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5170', 'name' => 'Consumption Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5180', 'name' => 'Supplies Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5190', 'name' => 'Bank Administration Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5201', 'name' => 'Operational Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5210', 'name' => 'Tax Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5220', 'name' => 'Marketing Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5230', 'name' => 'Other Operating Expense', 'is_postable' => true],
+    ['category_code' => 'OPERATING_EXPENSE', 'code' => '5401', 'name' => 'Depreciation Expense', 'is_postable' => true],
+
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5300', 'name' => 'Interest Expense', 'is_postable' => true],
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5301', 'name' => 'Inventory Loss', 'is_postable' => true],
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5310', 'name' => 'Foreign Exchange Loss', 'is_postable' => true],
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5320', 'name' => 'Other Loss', 'is_postable' => true],
+    ['category_code' => 'OTHER_EXPENSE', 'code' => '5501', 'name' => 'Bad Debt Expense', 'is_postable' => true],
+];

@@ -3,6 +3,7 @@
 use ESolution\LaravelAccounting\Http\Controllers\Api\AccountCategoryController;
 use ESolution\LaravelAccounting\Http\Controllers\Api\AccountController;
 use ESolution\LaravelAccounting\Http\Controllers\Api\JournalController;
+use ESolution\LaravelAccounting\Http\Controllers\Api\ReportController;
 use ESolution\LaravelAccounting\Http\Controllers\Api\ServiceController;
 use Illuminate\Support\Facades\Route;
 
@@ -46,11 +47,11 @@ $defineRoutes = function ($tenantId = null) {
 
     // Reports
     Route::prefix($prefix.'reports')->group(function () use ($tenantId) {
-        Route::get('general-ledger', [\ESolution\LaravelAccounting\Http\Controllers\Api\ReportController::class, 'generalLedger'])->name($tenantId ? 'tenant.reports.general-ledger' : 'reports.general-ledger');
-        Route::get('trial-balance', [\ESolution\LaravelAccounting\Http\Controllers\Api\ReportController::class, 'trialBalance'])->name($tenantId ? 'tenant.reports.trial-balance' : 'reports.trial-balance');
-        Route::get('profit-loss', [\ESolution\LaravelAccounting\Http\Controllers\Api\ReportController::class, 'profitLoss'])->name($tenantId ? 'tenant.reports.profit-loss' : 'reports.profit-loss');
-        Route::get('balance-sheet', [\ESolution\LaravelAccounting\Http\Controllers\Api\ReportController::class, 'balanceSheet'])->name($tenantId ? 'tenant.reports.balance-sheet' : 'reports.balance-sheet');
-        Route::get('cash-flow', [\ESolution\LaravelAccounting\Http\Controllers\Api\ReportController::class, 'cashFlow'])->name($tenantId ? 'tenant.reports.cash-flow' : 'reports.cash-flow');
+        Route::get('general-ledger', [ReportController::class, 'generalLedger'])->name($tenantId ? 'tenant.reports.general-ledger' : 'reports.general-ledger');
+        Route::get('trial-balance', [ReportController::class, 'trialBalance'])->name($tenantId ? 'tenant.reports.trial-balance' : 'reports.trial-balance');
+        Route::get('profit-loss', [ReportController::class, 'profitLoss'])->name($tenantId ? 'tenant.reports.profit-loss' : 'reports.profit-loss');
+        Route::get('balance-sheet', [ReportController::class, 'balanceSheet'])->name($tenantId ? 'tenant.reports.balance-sheet' : 'reports.balance-sheet');
+        Route::get('cash-flow', [ReportController::class, 'cashFlow'])->name($tenantId ? 'tenant.reports.cash-flow' : 'reports.cash-flow');
     });
 };
 

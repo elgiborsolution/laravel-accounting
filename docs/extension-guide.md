@@ -13,7 +13,7 @@ This guide explains the extension points that are actually present in the packag
 ## Add New Journal Templates
 
 1. Add the template to `ServiceAccountTemplateRegistry`.
-2. Ensure the referenced `account_code` exists in the default COA or in the application database.
+2. Ensure the referenced `account_code` exists as a leaf posting account under the desired category tree branch.
 3. Re-run the seeder.
 
 ## Add New Mappings
@@ -24,6 +24,8 @@ The supported extension mechanism is the seeder and registry pair:
 
 - `ServiceAccountTemplateRegistry`
 - `DefaultServiceAccountMappingsSeeder`
+
+If shared master database mode is enabled, those seeders should target the configured master connection for `acc_services`, `acc_service_accounts`, `acc_accounts`, and `acc_account_categories`.
 
 ## Override Package Behavior
 
@@ -47,6 +49,7 @@ There is no dedicated account-resolver contract or interface in the source tree.
 For now, the practical extension options are:
 
 - override `JournalService`
+- extend the repository classes when you need custom lookup behavior
 - extend `ServiceAccountTemplateRegistry`
 - pre-process payloads before calling `journalByMapping()`
 

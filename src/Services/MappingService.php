@@ -2,24 +2,19 @@
 
 namespace ESolution\LaravelAccounting\Services;
 
-use ESolution\LaravelAccounting\Models\ServiceAccount;
+use ESolution\LaravelAccounting\Repositories\ServiceAccountRepository;
 
 class MappingService
 {
+    public function __construct(protected ServiceAccountRepository $repository) {}
+
     public function findByKey(string $key)
     {
-        return ServiceAccount::query()
-            ->where('mapping_key', $key)
-            ->active()
-            ->first();
+        return $this->repository->findByKey($key);
     }
 
     public function getByService($serviceId)
     {
-        return ServiceAccount::query()
-            ->where('service_id', $serviceId)
-            ->active()
-            ->orderBy('sequence_no')
-            ->get();
+        return $this->repository->forServiceId($serviceId);
     }
 }

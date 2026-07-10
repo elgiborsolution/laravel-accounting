@@ -1,5 +1,6 @@
 <?php
 
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -9,7 +10,8 @@ return new class extends Migration
     public function up()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
-        Schema::create($tablePrefix.'journal_entries', function (Blueprint $blueprint) use ($tablePrefix) {
+        $resolver = app(AccountingConnectionResolver::class);
+        Schema::create($tablePrefix.'journal_entries', function (Blueprint $blueprint) {
             $blueprint->uuid('id')->primary();
             $blueprint->string('journal_no', 100)->unique();
             $blueprint->date('trx_date');
@@ -29,12 +31,14 @@ return new class extends Migration
             $blueprint->index(['source_type', 'source_id']);
         });
 
-        Schema::table($tablePrefix.'journal_entries', function (Blueprint $blueprint) use ($tablePrefix) {
-            $blueprint->foreign('service_id')
-                ->references('id')
-                ->on($tablePrefix.'services')
-                ->nullOnDelete();
-        });
+        if ($resolver->shouldCreateCrossConnectionForeignKeys()) {
+            Schema::table($tablePrefix.'journal_entries', function (Blueprint $blueprint) use ($tablePrefix) {
+                $blueprint->foreign('service_id')
+                    ->references('id')
+                    ->on($tablePrefix.'services')
+                    ->nullOnDelete();
+            });
+        }
     }
 
     public function down()

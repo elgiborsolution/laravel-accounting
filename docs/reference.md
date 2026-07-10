@@ -1,6 +1,15 @@
 # Public API Reference
 
-This page documents the actual public API exposed by the package source.
+This page documents the package surface area together with the normalized chart of accounts design used by the documentation baseline. The reporting hierarchy is defined by `acc_account_categories`, while `acc_accounts` contains only posting accounts.
+
+## Technical Data Model
+
+- `acc_account_categories` is hierarchical through `parent_id`.
+- Root category `type` values are `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, and `EXPENSE`.
+- `category_name` is custom.
+- `acc_accounts` has no `parent_id` and no `level`.
+- Every account must have `category_id`.
+- Financial reports aggregate balances from posting accounts into the category tree.
 
 ## Facade API
 
@@ -89,7 +98,8 @@ File: [`src/Services/JournalService.php`](/c:/laragon/www/package-custom/laravel
 
 Behavior notes:
 
-- `journalByMapping()` requires `service_code` and balanced items.
+- `journalByMapping()` resolves the service and mappings through repositories, requires `service_code`, and balanced items.
+- `journalByMapping()` is safe for shared master database setups because it does not depend on cross-connection `whereHas()` or eager loading against master tables.
 - `journalManual()` creates a balanced draft journal from arbitrary accounts.
 - `reverse()` creates a brand-new reversal journal and does not edit the original posted journal.
 - `post()` is idempotent for already-posted journals.
@@ -102,6 +112,10 @@ File: [`src/Services/CoaService.php`](/c:/laragon/www/package-custom/laravel-acc
 - `getTree()`
 - `activateAccount($id)`
 - `deactivateAccount($id)`
+
+Behavior note:
+
+- `getTree()` is documented as returning the category tree with posting accounts grouped under their categories.
 
 ### `MappingService`
 
@@ -169,191 +183,1122 @@ Public methods:
 - `all()`
 - `forService(string|AccountingServiceCode $serviceCode)`
 
-## Controllers and API Endpoints
+## HTTP API Reference
 
-### Account Categories
+### API Rules
 
-- `GET /api/accounting/categories`
-- `POST /api/accounting/categories`
-- `GET /api/accounting/categories/{id}`
-- `PUT /api/accounting/categories/{id}`
-- `DELETE /api/accounting/categories/{id}`
-- `PATCH /api/accounting/categories/{id}/toggle-status`
+- Base prefix: `config('accounting.route.prefix', 'api/accounting')`
+- Middleware: `config('accounting.route.middleware', ['api'])`
+- Every endpoint is registered twice:
+  - non-tenant form: `/api/accounting/...`
+  - tenant-aware form: `/api/accounting/{tenantId}/...`
+- Auth is not enforced by the package routes themselves. If the host app needs auth, add it through route middleware.
+- Standard success responses use the package envelope:
 
-Controller methods:
+```json
+{
+  "status": 200,
+  "message": "OK",
+  "data": {}
+}
+```
 
-- `index()`
-- `store()`
-- `show()`
-- `update()`
-- `destroy()`
-- `toggleStatus()`
+- Standard error responses from `errorResponse()` use:
 
-### Accounts
+```json
+{
+  "status": 422,
+  "message": "Validation Error",
+  "errors": {},
+  "data": null
+}
+```
 
-- `GET /api/accounting/accounts`
-- `POST /api/accounting/accounts`
-- `GET /api/accounting/accounts/{id}`
-- `PUT /api/accounting/accounts/{id}`
-- `DELETE /api/accounting/accounts/{id}`
-- `PATCH /api/accounting/accounts/{id}/toggle-status`
+- Validation failures triggered by `$request->validate()` use Laravel's default JSON validation response.
+- `GET /api/accounting/journals` is the only endpoint in this package that returns a raw Laravel paginator instead of the package response envelope.
+- Master-data models (`categories`, `accounts`, `services`, `service_accounts`) may use the shared master connection when enabled.
+- Transaction-data models (`journal_entries`, `journal_entry_details`, `fiscal_periods`, `monthly_balances`) always follow the active application connection.
 
-Controller methods:
+### Endpoint Summary
 
-- `index()`
-- `store()`
-- `show()`
-- `update()`
-- `destroy()`
-- `toggleStatus()`
+| Controller | Method | Endpoint |
+| --- | --- | --- |
+| AccountCategoryController | GET | `/api/accounting/categories` |
+| AccountCategoryController | POST | `/api/accounting/categories` |
+| AccountCategoryController | GET | `/api/accounting/categories/{id}` |
+| AccountCategoryController | PUT | `/api/accounting/categories/{id}` |
+| AccountCategoryController | DELETE | `/api/accounting/categories/{id}` |
+| AccountCategoryController | PATCH | `/api/accounting/categories/{id}/toggle-status` |
+| AccountController | GET | `/api/accounting/accounts` |
+| AccountController | POST | `/api/accounting/accounts` |
+| AccountController | GET | `/api/accounting/accounts/{id}` |
+| AccountController | PUT | `/api/accounting/accounts/{id}` |
+| AccountController | DELETE | `/api/accounting/accounts/{id}` |
+| AccountController | PATCH | `/api/accounting/accounts/{id}/toggle-status` |
+| ServiceController | GET | `/api/accounting/services` |
+| ServiceController | POST | `/api/accounting/services` |
+| ServiceController | GET | `/api/accounting/services/{id}` |
+| ServiceController | PUT | `/api/accounting/services/{id}` |
+| ServiceController | DELETE | `/api/accounting/services/{id}` |
+| ServiceController | PATCH | `/api/accounting/services/{id}/toggle-status` |
+| JournalController | GET | `/api/accounting/journals` |
+| JournalController | GET | `/api/accounting/journals/{id}` |
+| JournalController | POST | `/api/accounting/journals/{id}/reverse` |
+| ReportController | GET | `/api/accounting/reports/general-ledger` |
+| ReportController | GET | `/api/accounting/reports/trial-balance` |
+| ReportController | GET | `/api/accounting/reports/profit-loss` |
+| ReportController | GET | `/api/accounting/reports/balance-sheet` |
+| ReportController | GET | `/api/accounting/reports/cash-flow` |
 
-### Services
+## Account Categories
 
-- `GET /api/accounting/services`
-- `POST /api/accounting/services`
-- `GET /api/accounting/services/{id}`
-- `PUT /api/accounting/services/{id}`
-- `DELETE /api/accounting/services/{id}`
-- `PATCH /api/accounting/services/{id}/toggle-status`
+### GET `/api/accounting/categories`
 
-Controller methods:
+Description: returns category data only by default. No `children` or `accounts` relation is serialized unless explicitly requested.
 
-- `index()`
-- `store()`
-- `show()`
-- `update()`
-- `destroy()`
-- `toggleStatus()`
+Authentication: no package-level auth. Host app may add auth middleware.
 
-### Journals
+Query parameters:
 
-- `GET /api/accounting/journals`
-- `GET /api/accounting/journals/{id}`
-- `POST /api/accounting/journals/{id}/reverse`
+- `with` `string|array` optional
+- Supported values: `children`, `accounts`
+- Accepted formats:
+  - `with=children`
+  - `with=accounts`
+  - `with=children,accounts`
+  - `with[]=children`
+  - `with[]=accounts`
+- `root_only` `boolean` optional
+- When `true`, only categories with `parent_id = null` are returned.
+- `parent_id` `uuid|string` optional
+- When provided, only child categories with `parent_id = {id}` are returned.
+- The category with `id = {id}` itself is excluded.
+- If `parent_id` is present, it takes precedence over `root_only`.
 
-Controller methods:
+Response body:
 
-- `index()`
-- `show()`
-- `reverse()`
+- Default response uses `AccountCategoryResource` and includes:
+  - `id`
+  - `category_code`
+  - `category_name`
+  - `type`
+  - `parent_id`
+  - `sequence_no`
+  - `is_active`
+- When `with=children`, the controller returns a tree node payload with recursive `children`.
+- When `with=accounts`, the controller attaches `accounts`.
+- When both are requested, both relations are present.
 
-### Reports
+Validation rules: none, this endpoint only reads query parameters.
 
-- `GET /api/accounting/reports/general-ledger`
-- `GET /api/accounting/reports/trial-balance`
-- `GET /api/accounting/reports/profit-loss`
-- `GET /api/accounting/reports/balance-sheet`
-- `GET /api/accounting/reports/cash-flow`
+Error response:
 
-Controller methods:
+- `404` is not expected here unless the controller raises an unexpected model error.
+- `500` may occur for unexpected runtime errors.
 
-- `generalLedger()`
-- `trialBalance()`
-- `profitLoss()`
-- `balanceSheet()`
-- `cashFlow()`
+Example request:
 
-## Models
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/categories?root_only=true&with=children,accounts' \
+--header 'Accept: application/json'
+```
 
-### `AccountCategory`
+Example response:
 
-- `accounts()`
+```json
+{
+  "status": 200,
+  "message": "Account categories retrieved successfully",
+  "data": [
+    {
+      "id": "uuid",
+      "category_code": "ASSET",
+      "category_name": "Asset",
+      "type": "ASSET",
+      "parent_id": null,
+      "sequence_no": 1,
+      "is_active": true,
+      "children": []
+    }
+  ]
+}
+```
 
-### `Account`
+Notes:
 
-- `category()`
-- `parent()`
-- `children()`
-- `mappings()`
+- `with=children` switches the endpoint into hierarchical/tree mode.
+- This endpoint does not eager-load `accounts` unless `with` explicitly asks for it.
+- Cache keys are parameter-aware, so `root_only`, `parent_id`, and `with` combinations are cached separately.
 
-### `Service`
+### POST `/api/accounting/categories`
 
-- `accounts()`
-- `mappings()`
+Description: creates a new account category.
 
-### `ServiceAccount`
+Request body:
 
-- `service()`
-- `account()`
-- `scopeActive()`
+- `parent_id` optional
+- `type` required
+- `category_code` required
+- `category_name` required
+- `report_type` optional
+- `sequence_no` optional
+- `status` optional
 
-### `JournalEntry`
+Validation rules:
 
-- `service()`
-- `details()`
-- `reversalOf()`
-- `reversals()`
-- `getTypeAttribute()`
+- `parent_id` nullable and must exist in the category table
+- `type` required and must be one of `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, `EXPENSE` or lowercase variants
+- `category_code` required string max 50 and unique
+- `category_name` required string max 100
+- `report_type` nullable string max 50
+- `sequence_no` nullable integer
+- `status` nullable boolean
 
-### `JournalEntryDetail`
+Notes:
 
-- `header()`
-- `account()`
+- `type` is normalized to uppercase before save.
+- If `report_type` is omitted, the controller defaults to `BS` for asset/liability/equity and `PL` for revenue/expense.
 
-### `FiscalPeriod`
+Example request:
 
-- No public relations or custom methods beyond `getTable()`
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/categories' \
+--header 'Accept: application/json' \
+--header 'Content-Type: application/json' \
+--data '{
+  "parent_id": null,
+  "type": "ASSET",
+  "category_code": "CURRENT_ASSET",
+  "category_name": "Current Asset",
+  "sequence_no": 1,
+  "status": true
+}'
+```
 
-### `MonthlyBalance`
+Example response:
 
-- `account()`
+```json
+{
+  "status": 201,
+  "message": "Account category created successfully",
+  "data": {
+    "id": "uuid",
+    "parent_id": null,
+    "type": "ASSET",
+    "category_code": "CURRENT_ASSET",
+    "category_name": "Current Asset",
+    "report_type": "BS",
+    "sequence_no": 1,
+    "status": true
+  }
+}
+```
 
-### `ReportMapping`
+### GET `/api/accounting/categories/{id}`
 
-- `account()`
+Description: returns a single category as a tree node, including `path`, recursive `children`, and `accounts`.
 
-## Enums
+Path parameters:
 
-### `AccountingServiceCode`
+- `id` required
 
-Default ERP service codes shipped by the package.
+Response body:
 
-### `JournalStatus`
+- `id`
+- `parent_id`
+- `type`
+- `category_code`
+- `category_name`
+- `report_type`
+- `sequence_no`
+- `status`
+- `path`
+- `children`
+- `accounts`
 
-- `DRAFT`
-- `POSTED`
-- `REVERSED`
+Example response:
 
-### `NormalBalance`
+```json
+{
+  "status": 200,
+  "message": "Account category retrieved successfully",
+  "data": {
+    "id": "uuid",
+    "parent_id": null,
+    "type": "ASSET",
+    "category_code": "ASSET",
+    "category_name": "Asset",
+    "report_type": "BS",
+    "sequence_no": 1,
+    "status": true,
+    "path": ["Asset"],
+    "children": [],
+    "accounts": []
+  }
+}
+```
 
-- `DEBIT`
-- `CREDIT`
+### PUT `/api/accounting/categories/{id}`
 
-### `ReportType`
+Description: updates an existing category.
 
-- `BALANCE_SHEET`
-- `PROFIT_LOSS`
-- `CASH_FLOW`
+Path parameters:
 
-## Traits and Exceptions
+- `id` required
 
-### `ApiResponse`
+Request body:
 
-Methods:
+- `parent_id` optional
+- `type` optional
+- `category_code` optional
+- `category_name` optional
+- `report_type` optional
+- `sequence_no` optional
+- `status` optional
 
-- `successResponse($message = null, $data = null, $code = 200)`
-- `errorResponse($data, $code = 422, $message = null)`
+Validation rules:
 
-### `HasUuid`
+- `parent_id` nullable and must exist in the category table
+- `type` nullable and must be one of the supported category types or lowercase variants
+- `category_code` nullable string max 50 and unique except current record
+- `category_name` nullable string max 100
+- `report_type` nullable string max 50
+- `sequence_no` nullable integer
+- `status` nullable boolean
 
-Methods:
+Notes:
 
-- `getIncrementing()`
-- `getKeyType()`
+- `type` is uppercased before save when supplied.
+- If `report_type` is omitted, it is inferred from the provided or existing type.
 
-### `AccountingPeriodLockedException`
+Example response:
 
-- Thrown when a journal is posted or reversed inside a closed fiscal period.
+```json
+{
+  "status": 200,
+  "message": "Account category updated successfully",
+  "data": {
+    "id": "uuid",
+    "category_code": "CURRENT_ASSET",
+    "category_name": "Current Asset",
+    "type": "ASSET",
+    "parent_id": null,
+    "sequence_no": 1,
+    "status": true
+  }
+}
+```
 
-## What Does Not Exist Yet
+### DELETE `/api/accounting/categories/{id}`
 
-These are not present in the source tree:
+Description: deletes a category only when it has no descendants and no linked accounts.
 
-- Contracts / interfaces
-- Repositories
-- Action classes
-- DTO classes
-- Events
-- Listeners
-- Global helper functions
+Path parameters:
+
+- `id` required
+
+Error conditions:
+
+- Returns `422` when the category still has child categories or accounts.
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Account category deleted successfully",
+  "data": null
+}
+```
+
+### PATCH `/api/accounting/categories/{id}/toggle-status`
+
+Description: flips the `status` flag for a category.
+
+Path parameters:
+
+- `id` required
+
+Request body: none.
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Account category status toggled successfully",
+  "data": {
+    "id": "uuid",
+    "status": false
+  }
+}
+```
+
+## Accounts
+
+### GET `/api/accounting/accounts`
+
+Description: lists accounts without relations by default.
+
+Query parameters:
+
+- `search` optional
+- Matches `code` or `name` using `LIKE`
+- `with` optional
+- Supported values:
+  - `category`
+  - `tree_category`
+  - `balance`
+- `with=category` loads the direct category relation.
+- `with=tree_category` loads the category lineage from root to the account's category.
+- `with=balance` loads the account balance object.
+- `with=category,balance` and `with=tree_category,balance` are supported.
+- Any other value is ignored and no relation is included.
+- `year` optional
+- Used only when `with=balance` is requested.
+- Default: current year
+- `month` optional
+- Used only when `with=balance` is requested.
+- Default: current month
+
+Response body:
+
+- Success envelope with a collection of accounts
+- Default response does not include `category` or `tree_category`
+- When requested, `category`, `tree_category`, and/or `balance` are serialized on each account
+- `balance` contains:
+  - `opening_balance`
+  - `total_debit`
+  - `total_credit`
+  - `ending_balance`
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Accounts retrieved successfully",
+  "data": [
+    {
+      "id": "uuid",
+      "category_id": "uuid",
+      "code": "1001",
+      "name": "Cash",
+      "is_postable": true,
+      "status": true
+    }
+  ]
+}
+```
+
+Example with balance:
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/accounts?with=balance&year=2026&month=7' \
+--header 'Accept: application/json'
+```
+
+```json
+{
+  "status": 200,
+  "message": "Accounts retrieved successfully",
+  "data": [
+    {
+      "id": "uuid",
+      "category_id": "uuid",
+      "code": "1001",
+      "name": "Cash",
+      "is_postable": true,
+      "status": true,
+      "balance": {
+        "opening_balance": 1000000,
+        "total_debit": 500000,
+        "total_credit": 250000,
+        "ending_balance": 1250000
+      }
+    }
+  ]
+}
+```
+
+### POST `/api/accounting/accounts`
+
+Description: creates a new account.
+
+Request body:
+
+- `category_id` required
+- `code` required
+- `name` required
+- `is_postable` optional
+- `status` optional
+
+Validation rules:
+
+- `category_id` required and must exist in the category table
+- `code` required string max 30 and unique
+- `name` required string max 200
+- `is_postable` nullable boolean
+- `status` nullable boolean
+
+Example response:
+
+```json
+{
+  "status": 201,
+  "message": "Account created successfully",
+  "data": {
+    "id": "uuid",
+    "category_id": "uuid",
+    "code": "1001",
+    "name": "Cash",
+    "is_postable": true,
+    "status": true
+  }
+}
+```
+
+### GET `/api/accounting/accounts/{id}`
+
+Description: returns one account with its category relation.
+
+Path parameters:
+
+- `id` required
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Account retrieved successfully",
+  "data": {
+    "id": "uuid",
+    "category_id": "uuid",
+    "code": "1001",
+    "name": "Cash",
+    "is_postable": true,
+    "status": true,
+    "category": {
+      "id": "uuid",
+      "category_name": "Current Asset"
+    }
+  }
+}
+```
+
+### PUT `/api/accounting/accounts/{id}`
+
+Description: updates an account.
+
+Path parameters:
+
+- `id` required
+
+Request body:
+
+- `category_id` optional
+- `code` optional
+- `name` optional
+- `is_postable` optional
+- `status` optional
+
+Validation rules:
+
+- `category_id` nullable and must exist in the category table
+- `code` nullable string max 30 and unique except current record
+- `name` nullable string max 200
+- `is_postable` nullable boolean
+- `status` nullable boolean
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Account updated successfully",
+  "data": {
+    "id": "uuid",
+    "code": "1001",
+    "name": "Cash",
+    "status": true
+  }
+}
+```
+
+### DELETE `/api/accounting/accounts/{id}`
+
+Description: deletes an account.
+
+Path parameters:
+
+- `id` required
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Account deleted successfully",
+  "data": null
+}
+```
+
+### PATCH `/api/accounting/accounts/{id}/toggle-status`
+
+Description: flips the `status` flag for an account.
+
+Path parameters:
+
+- `id` required
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Account status toggled successfully",
+  "data": {
+    "id": "uuid",
+    "status": false
+  }
+}
+```
+
+## Services
+
+### GET `/api/accounting/services`
+
+Description: returns all services and eagerly loads mappings plus mapped account data.
+
+Query parameters: none.
+
+Response body:
+
+- Success envelope with a collection of services
+- Each service includes `mappings`
+- Each mapping includes its mapped `account` when present
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Services retrieved successfully",
+  "data": [
+    {
+      "id": "uuid",
+      "service_code": "SALES_CASH",
+      "service_name": "Cash Sales",
+      "module_name": "sales",
+      "description": "Cash sale flow",
+      "status": true,
+      "mappings": [
+        {
+          "id": "uuid",
+          "mapping_key": "cash",
+          "mapping_name": "Cash",
+          "position": "D",
+          "account_id": "uuid",
+          "account": {
+            "id": "uuid",
+            "code": "1001",
+            "name": "Cash"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### POST `/api/accounting/services`
+
+Description: creates a service and its mappings in one transaction.
+
+Request body:
+
+- `service_code` required
+- `service_name` required
+- `module_name` required
+- `description` optional
+- `status` optional
+- `mappings` optional array
+
+Validation rules:
+
+- `service_code` required string max 100 and unique
+- `service_name` required string max 200
+- `module_name` required string max 100
+- `description` nullable string
+- `status` nullable boolean
+- `mappings` nullable array
+- `mappings.*.mapping_key` required string max 150
+- `mappings.*.mapping_name` required string max 200
+- `mappings.*.position` required and must be `D` or `K`
+- `mappings.*.account_id` nullable and must exist in the account table
+- `mappings.*.sequence_no` nullable integer
+- `mappings.*.is_dynamic` nullable boolean
+- `mappings.*.is_required` nullable boolean
+
+Example response:
+
+```json
+{
+  "status": 201,
+  "message": "Service created successfully",
+  "data": {
+    "id": "uuid",
+    "service_code": "SALES_CASH",
+    "service_name": "Cash Sales",
+    "module_name": "sales",
+    "mappings": []
+  }
+}
+```
+
+### GET `/api/accounting/services/{id}`
+
+Description: returns one service with mappings and mapped accounts.
+
+Path parameters:
+
+- `id` required
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Service retrieved successfully",
+  "data": {
+    "id": "uuid",
+    "service_code": "SALES_CASH",
+    "service_name": "Cash Sales",
+    "module_name": "sales",
+    "status": true,
+    "mappings": []
+  }
+}
+```
+
+### PUT `/api/accounting/services/{id}`
+
+Description: updates a service and synchronizes its mappings.
+
+Path parameters:
+
+- `id` required
+
+Request body:
+
+- `service_code` optional
+- `service_name` optional
+- `module_name` optional
+- `description` optional
+- `status` optional
+- `mappings` optional array
+
+Validation rules:
+
+- `service_code` nullable string max 100 and unique except current record
+- `service_name` nullable string max 200
+- `module_name` nullable string max 100
+- `description` nullable string
+- `status` nullable boolean
+- `mappings` nullable array
+- `mappings.*.id` nullable and must exist in the service-account table
+- `mappings.*.mapping_key` required string max 150
+- `mappings.*.mapping_name` required string max 200
+- `mappings.*.position` required and must be `D` or `K`
+- `mappings.*.account_id` nullable and must exist in the account table
+- `mappings.*.sequence_no` nullable integer
+- `mappings.*.is_dynamic` nullable boolean
+- `mappings.*.is_required` nullable boolean
+- `mappings.*.status` nullable boolean
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Service updated successfully",
+  "data": {
+    "id": "uuid",
+    "service_code": "SALES_CASH",
+    "service_name": "Cash Sales",
+    "module_name": "sales",
+    "mappings": []
+  }
+}
+```
+
+### DELETE `/api/accounting/services/{id}`
+
+Description: deletes a service and its mappings.
+
+Path parameters:
+
+- `id` required
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Service and its mappings deleted successfully",
+  "data": null
+}
+```
+
+### PATCH `/api/accounting/services/{id}/toggle-status`
+
+Description: flips the service active flag.
+
+Path parameters:
+
+- `id` required
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Service status toggled successfully",
+  "data": {
+    "id": "uuid",
+    "status": false
+  }
+}
+```
+
+## Journals
+
+### GET `/api/accounting/journals`
+
+Description: returns a paginated list of journals ordered by transaction date descending, then journal number descending.
+
+Authentication: package-level auth is not enforced.
+
+Query parameters:
+
+- `page` optional integer, default `1`
+- `per_page` optional integer, default `15`
+- `search` optional string
+- `start_date` optional date
+- `end_date` optional date
+- `status` optional string
+- Supported status values are the `JournalStatus` enum values:
+  - `draft`
+  - `posted`
+  - `reversed`
+
+Response body:
+
+- This endpoint returns a raw Laravel paginator, not the package response envelope.
+- Each journal item has the `service` relation loaded when a `service_id` exists.
+
+Example request:
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/journals?search=JV&per_page=10' \
+--header 'Accept: application/json'
+```
+
+Example response:
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "journal_no": "JV/2026/07/0001",
+      "trx_date": "2026-07-10",
+      "status": "posted",
+      "service": {
+        "id": "uuid",
+        "service_code": "SALES_CASH"
+      }
+    }
+  ],
+  "links": {},
+  "meta": {}
+}
+```
+
+Notes:
+
+- `search` matches `journal_no`, `reference_no`, and `description`.
+- `start_date` and `end_date` filter `trx_date`.
+- The paginator is cached per filter combination.
+
+### GET `/api/accounting/journals/{id}`
+
+Description: returns a journal with service, details, detail accounts, reversals, and reversal source information.
+
+Path parameters:
+
+- `id` required
+
+Response body:
+
+- `service`
+- `details`
+- `details[].account`
+- `reversals`
+- `reversalOf` when the journal is a reversal
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Journal retrieved successfully",
+  "data": {
+    "id": "uuid",
+    "journal_no": "JV/2026/07/0001",
+    "status": "posted",
+    "service": {
+      "id": "uuid",
+      "service_code": "SALES_CASH"
+    },
+    "details": [
+      {
+        "id": "uuid",
+        "account_id": "uuid",
+        "debit": "1000.00",
+        "credit": "0.00",
+        "account": {
+          "id": "uuid",
+          "code": "1001",
+          "name": "Cash"
+        }
+      }
+    ],
+    "reversals": []
+  }
+}
+```
+
+### POST `/api/accounting/journals/{id}/reverse`
+
+Description: creates a reversal journal for a posted journal.
+
+Path parameters:
+
+- `id` required
+
+Request body:
+
+- `reason` required string max 1000
+
+Validation rules:
+
+- `reason` required|string|max:1000
+
+Example request:
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/journals/uuid/reverse' \
+--header 'Accept: application/json' \
+--header 'Content-Type: application/json' \
+--data '{
+  "reason": "Customer refund"
+}'
+```
+
+Example response:
+
+```json
+{
+  "status": 201,
+  "message": "Journal reversed successfully",
+  "data": {
+    "original_journal_id": "uuid",
+    "reversal_journal_id": "uuid"
+  }
+}
+```
+
+Notes:
+
+- Only posted journals can be reversed.
+- The reversal journal is created as a new entry; the original journal is not edited.
+
+## Reports
+
+### GET `/api/accounting/reports/general-ledger`
+
+Description: returns general ledger movement for a single account.
+
+Query parameters:
+
+- `account_id` required uuid
+- `start_date` required date
+- `end_date` required date and must be greater than or equal to `start_date`
+
+Response body:
+
+- `account`
+- `opening_balance`
+- `details`
+- `account.category_path`
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "General Ledger retrieved successfully",
+  "data": {
+    "account": {
+      "id": "uuid",
+      "code": "1001",
+      "name": "Cash",
+      "category_path": ["Asset", "Current Asset"]
+    },
+    "opening_balance": 1000,
+    "details": []
+  }
+}
+```
+
+### GET `/api/accounting/reports/trial-balance`
+
+Description: returns trial balance for a year and month.
+
+Query parameters:
+
+- `year` required integer
+- `month` required integer between 1 and 12
+
+Response body:
+
+- `data`
+- `total_assets`
+- `total_liabilities`
+- `total_equity`
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Trial Balance retrieved successfully",
+  "data": {
+    "data": [],
+    "total_assets": 0,
+    "total_liabilities": 0,
+    "total_equity": 0
+  }
+}
+```
+
+### GET `/api/accounting/reports/profit-loss`
+
+Description: returns profit and loss report for a year and month.
+
+Query parameters:
+
+- `year` required integer
+- `month` required integer between 1 and 12
+
+Response body:
+
+- `data.revenue`
+- `data.expense`
+- `net_income`
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Profit & Loss retrieved successfully",
+  "data": {
+    "data": {
+      "revenue": [],
+      "expense": []
+    },
+    "net_income": 0
+  }
+}
+```
+
+### GET `/api/accounting/reports/balance-sheet`
+
+Description: returns balance sheet for a year and month.
+
+Query parameters:
+
+- `year` required integer
+- `month` required integer between 1 and 12
+
+Response body:
+
+- `data.asset`
+- `data.liability`
+- `data.equity`
+- `total_assets`
+- `total_liabilities`
+- `total_equity`
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Balance Sheet retrieved successfully",
+  "data": {
+    "data": {
+      "asset": [],
+      "liability": [],
+      "equity": []
+    },
+    "total_assets": 0,
+    "total_liabilities": 0,
+    "total_equity": 0
+  }
+}
+```
+
+### GET `/api/accounting/reports/cash-flow`
+
+Description: returns cash flow report for a year and month.
+
+Query parameters:
+
+- `year` required integer
+- `month` required integer between 1 and 12
+
+Response body:
+
+- `data.operating`
+- `data.investing`
+- `data.financing`
+- `net_cash_flow`
+
+Example response:
+
+```json
+{
+  "status": 200,
+  "message": "Cash Flow retrieved successfully",
+  "data": {
+    "data": {
+      "operating": [],
+      "investing": [],
+      "financing": []
+    },
+    "net_cash_flow": 0
+  }
+}
+```
+
+## Implementation Notes
+
+- There are no dedicated Form Request classes in the package; validation is handled inline in controllers.
+- Categories, accounts, and services are master-data endpoints.
+- Journals and fiscal-period/balance logic are transaction-data endpoints and follow the application's active connection.
+- Route model binding is not used for these endpoints; the controllers read `id` manually and resolve tenant context through the `tenantId` route segment or `X-Tenant` header when present.
 

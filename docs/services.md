@@ -2,6 +2,10 @@
 
 This package ships a default ERP service catalog in `acc_services` and seeds default mapping templates in `acc_service_accounts`.
 
+Those master tables can live on the active application or tenant connection, or on a shared master connection when `ACCOUNTING_USE_SHARED_DATABASE=true`.
+
+All account examples below refer to leaf posting accounts. Hierarchy belongs to `acc_account_categories`, not to `acc_accounts`.
+
 ## Source Of Truth
 
 - Service codes: [`src/Enums/AccountingServiceCode.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Enums/AccountingServiceCode.php)
@@ -19,6 +23,8 @@ This package ships a default ERP service catalog in `acc_services` and seeds def
 - `sequence_no` controls ordering
 - `is_dynamic` means the account may be supplied at runtime
 - `is_required` means the mapping must be present for the service to post
+
+In shared master mode, `JournalService::journalByMapping()` resolves the service and mapping rows from the configured master connection instead of the tenant database.
 
 ## SALES
 
@@ -52,6 +58,26 @@ app(\ESolution\LaravelAccounting\Services\JournalService::class)->journalByMappi
 ]);
 ```
 
+### `SALES_CASH_VAT`
+
+- Service code: `SALES_CASH_VAT`
+- Description: Cash sales transaction with 11% output VAT.
+- Business purpose: Record cash sales at net revenue, recognize output VAT liability, recognize cost of goods sold, and reduce inventory.
+- Default journal template:
+  - Debit: Cash/Bank
+  - Credit: Sales Revenue
+  - Credit: Output VAT
+  - Debit: Cost of Goods Sold
+  - Credit: Inventory
+- Required mappings:
+  - `sales_cash_vat_cash_d`
+  - `sales_cash_vat_sales_k`
+  - `sales_cash_vat_vat_k`
+  - `sales_cash_vat_cogs_d`
+  - `sales_cash_vat_inventory_k`
+- Dynamic mappings:
+  - `sales_cash_vat_cash_d`
+
 ### `SALES_CREDIT`
 
 - Service code: `SALES_CREDIT`
@@ -65,6 +91,25 @@ app(\ESolution\LaravelAccounting\Services\JournalService::class)->journalByMappi
   - `sales_credit_sales_k`
   - `sales_credit_cogs_d`
   - `sales_credit_inventory_k`
+- Dynamic mappings: none
+
+### `SALES_CREDIT_VAT`
+
+- Service code: `SALES_CREDIT_VAT`
+- Description: Credit sales transaction with 11% output VAT.
+- Business purpose: Record credit sales at net revenue, recognize accounts receivable at gross invoice value, book output VAT liability, and record inventory release.
+- Default journal template:
+  - Debit: Accounts Receivable
+  - Credit: Sales Revenue
+  - Credit: Output VAT
+  - Debit: Cost of Goods Sold
+  - Credit: Inventory
+- Required mappings:
+  - `sales_credit_vat_ar_d`
+  - `sales_credit_vat_sales_k`
+  - `sales_credit_vat_vat_k`
+  - `sales_credit_vat_cogs_d`
+  - `sales_credit_vat_inventory_k`
 - Dynamic mappings: none
 
 ### `SALES_RETURN`
@@ -522,6 +567,20 @@ app(\ESolution\LaravelAccounting\Services\JournalService::class)->journalByMappi
   - `tax_payment_cash_k`
 - Dynamic mappings:
   - `tax_payment_cash_k`
+
+### `VAT_PAYMENT`
+
+- Service code: `VAT_PAYMENT`
+- Description: VAT payment transaction.
+- Business purpose: Settle output VAT payable to the tax authority without affecting profit or loss.
+- Default journal template:
+  - Debit: Output VAT
+  - Credit: Cash/Bank
+- Required mappings:
+  - `vat_payment_vat_d`
+  - `vat_payment_cash_k`
+- Dynamic mappings:
+  - `vat_payment_cash_k`
 
 ## CLOSING
 

@@ -17,6 +17,8 @@ class ReportController extends BaseController
 
     public function generalLedger(Request $request)
     {
+        $this->initializeTenantIfNeeded($request->route('tenantId'));
+
         $request->validate([
             'account_id' => 'required|uuid',
             'start_date' => 'required|date',
@@ -34,6 +36,8 @@ class ReportController extends BaseController
 
     public function trialBalance(Request $request)
     {
+        $this->initializeTenantIfNeeded($request->route('tenantId'));
+
         $request->validate([
             'year' => 'required|integer',
             'month' => 'required|integer|between:1,12',
@@ -46,6 +50,8 @@ class ReportController extends BaseController
 
     public function profitLoss(Request $request)
     {
+        $this->initializeTenantIfNeeded($request->route('tenantId'));
+
         $request->validate([
             'year' => 'required|integer',
             'month' => 'required|integer|between:1,12',
@@ -58,6 +64,8 @@ class ReportController extends BaseController
 
     public function balanceSheet(Request $request)
     {
+        $this->initializeTenantIfNeeded($request->route('tenantId'));
+
         $request->validate([
             'year' => 'required|integer',
             'month' => 'required|integer|between:1,12',
@@ -70,6 +78,8 @@ class ReportController extends BaseController
 
     public function cashFlow(Request $request)
     {
+        $this->initializeTenantIfNeeded($request->route('tenantId'));
+
         $request->validate([
             'year' => 'required|integer',
             'month' => 'required|integer|between:1,12',

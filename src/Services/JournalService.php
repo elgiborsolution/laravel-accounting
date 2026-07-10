@@ -8,17 +8,29 @@ use ESolution\LaravelAccounting\Exceptions\AccountingPeriodLockedException;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\JournalEntry;
-use ESolution\LaravelAccounting\Models\Service;
-use ESolution\LaravelAccounting\Services\FiscalPeriodService;
+use ESolution\LaravelAccounting\Models\JournalEntryDetail;
+use ESolution\LaravelAccounting\Repositories\AccountRepository;
+use ESolution\LaravelAccounting\Repositories\FiscalPeriodRepository;
+use ESolution\LaravelAccounting\Repositories\JournalRepository;
+use ESolution\LaravelAccounting\Repositories\ServiceAccountRepository;
+use ESolution\LaravelAccounting\Repositories\ServiceRepository;
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use Exception;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class JournalService
 {
     public function __construct(
-        protected ServiceCatalog $serviceCatalog
+        protected ServiceCatalog $serviceCatalog,
+        protected ServiceRepository $services,
+        protected ServiceAccountRepository $mappings,
+        protected AccountRepository $accounts,
+        protected JournalRepository $journals,
+        protected FiscalPeriodRepository $periods
     ) {}
 
     /**
@@ -26,7 +38,9 @@ class JournalService
      */
     public function journalByMapping(array $data)
     {
-        return DB::transaction(function () use ($data) {
+        $this->logConnectionSnapshot('journalByMapping:start');
+
+        return DB::connection($this->transactionConnection())->transaction(function () use ($data) {
             // 1. Validate service_code exists
             $serviceCode = $data['service_code'] ?? null;
             if (! $serviceCode) {
@@ -35,19 +49,14 @@ class JournalService
 
             $serviceCode = $this->normalizeServiceCode($serviceCode);
 
-            $service = Service::where('service_code', $serviceCode)
-                ->where('is_active', true)
-                ->first();
+            $service = $this->services->findByCode($serviceCode);
 
-            if (! $service) {
+            if (! $service || ! $service->is_active) {
                 throw new Exception("Service code not found or inactive: {$serviceCode}");
             }
 
             // 2. Load active mappings for this service
-            $serviceMappings = $service->accounts()
-                ->active()
-                ->get()
-                ->keyBy('mapping_key');
+            $serviceMappings = $this->mappings->forServiceId($service->id)->keyBy('mapping_key');
 
             $totalDebit = 0;
             $totalCredit = 0;
@@ -108,7 +117,7 @@ class JournalService
                 }
             }
 
-            $trxDate = isset($data['trx_date']) ? \Illuminate\Support\Carbon::parse($data['trx_date']) : now();
+            $trxDate = isset($data['trx_date']) ? Carbon::parse($data['trx_date']) : now();
 
             $this->checkPeriodLocked($trxDate);
 
@@ -128,7 +137,7 @@ class JournalService
             ]);
 
             foreach ($details as $detail) {
-                $journal->details()->create($detail);
+                JournalEntryDetail::create($detail + ['journal_entry_id' => $journal->id]);
             }
 
             if (config('accounting.journal.auto_post', true)) {
@@ -146,7 +155,7 @@ class JournalService
      */
     public function journalManual(array $data)
     {
-        return DB::transaction(function () use ($data) {
+        return DB::connection($this->transactionConnection())->transaction(function () use ($data) {
             if (! isset($data['items']) || empty($data['items'])) {
                 throw new Exception('Journal items are required');
             }
@@ -165,14 +174,14 @@ class JournalService
                 }
 
                 if (! $accountId) {
-                    $account = Account::where('code', $accountCode)->first();
+                    $account = $this->accounts->findByCode($accountCode);
                     if (! $account) {
                         throw new Exception("Account code not found: {$accountCode}");
                     }
                     $accountId = $account->id;
                 } else {
                     // Verify ID exists if provided
-                    if (! Account::where('id', $accountId)->exists()) {
+                    if (! $this->accounts->findById($accountId)) {
                         throw new Exception("Account ID not found: {$accountId}");
                     }
                 }
@@ -202,7 +211,7 @@ class JournalService
                 ];
             }
 
-            $trxDate = isset($data['trx_date']) ? \Illuminate\Support\Carbon::parse($data['trx_date']) : now();
+            $trxDate = isset($data['trx_date']) ? Carbon::parse($data['trx_date']) : now();
 
             $this->checkPeriodLocked($trxDate);
 
@@ -218,7 +227,7 @@ class JournalService
             ]);
 
             foreach ($details as $detail) {
-                $journal->details()->create($detail);
+                JournalEntryDetail::create($detail + ['journal_entry_id' => $journal->id]);
             }
 
             if (config('accounting.journal.auto_post', true)) {
@@ -236,8 +245,12 @@ class JournalService
      */
     public function reverse($journalId, string $reason)
     {
-        return DB::transaction(function () use ($journalId, $reason) {
-            $journal = JournalEntry::with('details')->findOrFail($journalId);
+        return DB::connection($this->transactionConnection())->transaction(function () use ($journalId, $reason) {
+            $journal = $this->journals->findWithDetails($journalId);
+
+            if (! $journal) {
+                throw new Exception('Journal not found');
+            }
 
             $this->validateReversal($journal);
 
@@ -260,8 +273,9 @@ class JournalService
                 'is_reversal' => true,
             ]);
 
-            foreach ($journal->details as $detail) {
-                $reversal->details()->create([
+            foreach ($journal->getRelation('details') as $detail) {
+                JournalEntryDetail::create([
+                    'journal_entry_id' => $reversal->id,
                     'account_id' => $detail->account_id,
                     'debit' => $detail->credit,
                     'credit' => $detail->debit,
@@ -271,7 +285,7 @@ class JournalService
 
             $this->clearCache();
 
-            return $reversal->load(['details.account', 'service', 'reversalOf']);
+            return $this->journals->attachViewRelations($reversal);
         });
     }
 
@@ -324,7 +338,7 @@ class JournalService
 
     protected function checkPeriodLocked($date)
     {
-        $date = \Illuminate\Support\Carbon::parse($date);
+        $date = Carbon::parse($date);
 
         app(FiscalPeriodService::class)->ensureForJournalDate($date);
 
@@ -345,7 +359,7 @@ class JournalService
 
         app(FiscalPeriodService::class)->ensureForJournalDate($journal->trx_date);
 
-        if ($journal->reversals()->exists()) {
+        if (JournalEntry::where('reversal_of_id', $journal->id)->exists()) {
             throw new Exception('This journal has already been reversed');
         }
 
@@ -358,7 +372,7 @@ class JournalService
 
     protected function isFiscalYearClosed($date): bool
     {
-        $date = \Illuminate\Support\Carbon::parse($date);
+        $date = Carbon::parse($date);
 
         $periods = FiscalPeriod::where('year', $date->year)->get();
 
@@ -383,7 +397,7 @@ class JournalService
     protected function generateJournalNo($date = null)
     {
         $format = config('accounting.journal.number_format', 'JV/{YEAR}/{MONTH}/{SEQ}');
-        $date = $date ? \Illuminate\Support\Carbon::parse($date) : now();
+        $date = $date ? Carbon::parse($date) : now();
         $year = $date->format('Y');
         $month = $date->format('m');
 
@@ -408,5 +422,26 @@ class JournalService
     protected function normalizeServiceCode(string|AccountingServiceCode $serviceCode): string
     {
         return $this->serviceCatalog->normalizeCode($serviceCode);
+    }
+
+    protected function logConnectionSnapshot(string $context): void
+    {
+        Log::debug('[Accounting] '.$context, [
+            'transaction_connection' => $this->transactionConnection(),
+            'journal_entry_connection' => (new JournalEntry)->getConnectionName(),
+            'journal_detail_connection' => (new JournalEntryDetail)->getConnectionName(),
+            'service_connection' => (new \ESolution\LaravelAccounting\Models\Service)->getConnectionName(),
+            'account_connection' => (new Account)->getConnectionName(),
+            'category_connection' => (new \ESolution\LaravelAccounting\Models\AccountCategory)->getConnectionName(),
+            'service_account_connection' => (new \ESolution\LaravelAccounting\Models\ServiceAccount)->getConnectionName(),
+            'default_connection' => DB::getDefaultConnection(),
+            'shared_master_enabled' => config('accounting.master_data.use_shared_database', false),
+            'master_connection' => config('accounting.master_data.connection'),
+        ]);
+    }
+
+    protected function transactionConnection(): ?string
+    {
+        return app(AccountingConnectionResolver::class)->resolveTransactionDataConnection();
     }
 }

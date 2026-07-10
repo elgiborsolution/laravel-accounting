@@ -4,11 +4,10 @@ namespace ESolution\LaravelAccounting\Models;
 
 use ESolution\LaravelAccounting\Enums\JournalStatus;
 use Exception;
-use Illuminate\Database\Eloquent\Model;
 
-class JournalEntry extends Model
+class JournalEntry extends TransactionDataModel
 {
-    use HasUuid;
+    protected string $baseTable = 'journal_entries';
 
     protected $fillable = [
         'journal_no',
@@ -42,16 +41,6 @@ class JournalEntry extends Model
                 throw new Exception('Posted journals are immutable. Create a reversing journal instead of editing existing entries.');
             }
         });
-    }
-
-    public function getTable()
-    {
-        return config('accounting.table_prefix', 'acc_').'journal_entries';
-    }
-
-    public function service()
-    {
-        return $this->belongsTo(Service::class, 'service_id');
     }
 
     public function details()

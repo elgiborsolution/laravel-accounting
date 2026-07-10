@@ -1,5 +1,6 @@
 <?php
 
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -9,7 +10,8 @@ return new class extends Migration
     public function up()
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
-        Schema::create($tablePrefix.'journal_entry_details', function (Blueprint $blueprint) use ($tablePrefix) {
+        $resolver = app(AccountingConnectionResolver::class);
+        Schema::create($tablePrefix.'journal_entry_details', function (Blueprint $blueprint) use ($tablePrefix, $resolver) {
             $blueprint->uuid('id')->primary();
             $blueprint->uuid('journal_entry_id');
             $blueprint->uuid('account_id');
@@ -20,18 +22,18 @@ return new class extends Migration
 
             $blueprint->index('journal_entry_id');
             $blueprint->index('account_id');
-        });
 
-        Schema::table($tablePrefix.'journal_entry_details', function (Blueprint $blueprint) use ($tablePrefix) {
             $blueprint->foreign('journal_entry_id')
                 ->references('id')
                 ->on($tablePrefix.'journal_entries')
                 ->cascadeOnDelete();
 
-            $blueprint->foreign('account_id')
-                ->references('id')
-                ->on($tablePrefix.'accounts')
-                ->cascadeOnDelete();
+            if ($resolver->shouldCreateCrossConnectionForeignKeys()) {
+                $blueprint->foreign('account_id')
+                    ->references('id')
+                    ->on($tablePrefix.'accounts')
+                    ->cascadeOnDelete();
+            }
         });
     }
 

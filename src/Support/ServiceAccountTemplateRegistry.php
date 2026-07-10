@@ -9,6 +9,20 @@ class ServiceAccountTemplateRegistry
     public function all(): array
     {
         return [
+            AccountingServiceCode::SALES_CASH_VAT->value => [
+                $this->template('sales_cash_vat_cash_d', 'Cash Sales with VAT 11% - Cash/Bank', 'D', '1001', 1, true),
+                $this->template('sales_cash_vat_sales_k', 'Cash Sales with VAT 11% - Sales Revenue', 'K', '4001', 2),
+                $this->template('sales_cash_vat_vat_k', 'Cash Sales with VAT 11% - Output VAT', 'K', '2301', 3),
+                $this->template('sales_cash_vat_cogs_d', 'Cash Sales with VAT 11% - Cost Of Goods Sold', 'D', '5001', 4),
+                $this->template('sales_cash_vat_inventory_k', 'Cash Sales with VAT 11% - Inventory', 'K', '1201', 5),
+            ],
+            AccountingServiceCode::SALES_CREDIT_VAT->value => [
+                $this->template('sales_credit_vat_ar_d', 'Credit Sales with VAT 11% - Accounts Receivable', 'D', '1101', 1),
+                $this->template('sales_credit_vat_sales_k', 'Credit Sales with VAT 11% - Sales Revenue', 'K', '4001', 2),
+                $this->template('sales_credit_vat_vat_k', 'Credit Sales with VAT 11% - Output VAT', 'K', '2301', 3),
+                $this->template('sales_credit_vat_cogs_d', 'Credit Sales with VAT 11% - Cost Of Goods Sold', 'D', '5001', 4),
+                $this->template('sales_credit_vat_inventory_k', 'Credit Sales with VAT 11% - Inventory', 'K', '1201', 5),
+            ],
             AccountingServiceCode::SALES_CASH->value => [
                 $this->template('sales_cash_cash_d', 'Sales Cash - Cash/Bank', 'D', '1001', 1, true),
                 $this->template('sales_cash_sales_k', 'Sales Cash - Sales Revenue', 'K', '4001', 2),
@@ -142,6 +156,10 @@ class ServiceAccountTemplateRegistry
             AccountingServiceCode::TAX_INPUT->value => [
                 $this->template('tax_input_vat_d', 'Tax Input - Input VAT', 'D', '1601', 1),
                 $this->template('tax_input_payable_k', 'Tax Input - Cash/AP', 'K', '2001', 2, true),
+            ],
+            AccountingServiceCode::VAT_PAYMENT->value => [
+                $this->template('vat_payment_vat_d', 'VAT Payment - Output VAT', 'D', '2301', 1),
+                $this->template('vat_payment_cash_k', 'VAT Payment - Cash/Bank', 'K', '1001', 2, true),
             ],
             AccountingServiceCode::TAX_PAYMENT->value => [
                 $this->template('tax_payment_payable_d', 'Tax Payment - Tax Payable', 'D', '2201', 1),
