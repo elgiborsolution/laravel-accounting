@@ -87,7 +87,7 @@ class AccountingConnectionModesTest extends TestCase
         ]);
 
         $this->assertSame('acc_accounts', Account::validationTable());
-        $this->assertSame('acc_journal_entries', JournalEntry::validationTable());
+        $this->assertSame('single.acc_journal_entries', JournalEntry::validationTable());
         $this->assertTrue(DB::connection('single')->table('acc_accounts')->where('code', '1000')->exists());
         $this->assertTrue(DB::connection('single')->table('acc_journal_entries')->where('journal_no', 'JV/2026/07/0001')->exists());
 
@@ -157,7 +157,7 @@ class AccountingConnectionModesTest extends TestCase
         ]);
 
         $this->assertSame('master.acc_accounts', Account::validationTable());
-        $this->assertSame('acc_journal_entries', JournalEntry::validationTable());
+        $this->assertSame('tenant.acc_journal_entries', JournalEntry::validationTable());
         $this->assertTrue(DB::connection('master')->table('acc_accounts')->where('code', '1000')->exists());
         $this->assertTrue(DB::connection('tenant')->table('acc_journal_entries')->where('journal_no', 'JV/2026/07/0001')->exists());
 
@@ -168,6 +168,60 @@ class AccountingConnectionModesTest extends TestCase
         $journal = app(JournalRepository::class)->attachViewRelations($journal);
         $this->assertSame('1000', $journal->details->first()->account->code);
         $this->assertSame('CASH_CASH_EQUIVALENT', AccountCategory::where('id', $journal->details->first()->account->category_id)->value('category_code'));
+    }
+
+    public function test_journal_show_endpoint_uses_transaction_connection_in_shared_master_mode(): void
+    {
+        $this->useTenantWithSharedMasterMode();
+        $this->createMasterTables('master');
+        $this->createTransactionTables('tenant');
+
+        $category = AccountCategory::create([
+            'type' => 'ASSET',
+            'category_code' => 'CASH_CASH_EQUIVALENT',
+            'category_name' => 'Cash & Cash Equivalent',
+            'report_type' => 'BS',
+            'sequence_no' => 1,
+            'status' => true,
+        ]);
+
+        $account = Account::create([
+            'category_id' => $category->id,
+            'code' => '1000',
+            'name' => 'Cash',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $service = Service::create([
+            'service_code' => 'FINANCE',
+            'service_name' => 'Finance',
+            'module_name' => 'FIN',
+            'description' => null,
+            'is_active' => true,
+        ]);
+
+        $journal = JournalEntry::create([
+            'journal_no' => 'JV/2026/07/0002',
+            'trx_date' => now(),
+            'service_id' => $service->id,
+            'description' => 'Journal show endpoint',
+            'status' => JournalStatus::DRAFT,
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $account->id,
+            'debit' => 250,
+            'credit' => 0,
+            'description' => 'Cash receipt',
+        ]);
+
+        $response = $this->getJson("/api/accounting/journals/{$journal->id}");
+
+        $response->assertOk()
+            ->assertJsonPath('data.id', $journal->id)
+            ->assertJsonPath('data.details.0.account.code', '1000');
     }
 
     public function test_multi_tenant_without_shared_master_keeps_master_data_on_tenant_connection(): void
@@ -217,7 +271,7 @@ class AccountingConnectionModesTest extends TestCase
         ]);
 
         $this->assertSame('acc_accounts', Account::validationTable());
-        $this->assertSame('acc_journal_entries', JournalEntry::validationTable());
+        $this->assertSame('tenant.acc_journal_entries', JournalEntry::validationTable());
         $this->assertTrue(DB::connection('tenant')->table('acc_accounts')->where('code', '1000')->exists());
         $this->assertTrue(DB::connection('tenant')->table('acc_journal_entries')->where('journal_no', 'JV/2026/07/0001')->exists());
     }

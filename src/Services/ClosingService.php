@@ -7,6 +7,7 @@ use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use Exception;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -27,7 +28,7 @@ class ClosingService
 
     protected function wrapTable(string $table): string
     {
-        return DB::connection()->getQueryGrammar()->wrapTable($table);
+        return DB::connection($this->transactionConnection())->getQueryGrammar()->wrapTable($table);
     }
 
     /**
@@ -35,7 +36,7 @@ class ClosingService
      */
     public function closeMonth($year, $month, $userId = null)
     {
-        return DB::transaction(function () use ($year, $month, $userId) {
+        return DB::connection($this->transactionConnection())->transaction(function () use ($year, $month, $userId) {
             app(FiscalPeriodService::class)->ensureForDate(Carbon::create($year, $month, 1));
 
             // 1. Validate fiscal period exists
@@ -159,7 +160,7 @@ class ClosingService
      */
     public function closeThroughCurrentMonth($userId = null)
     {
-        return DB::transaction(function () use ($userId) {
+        return DB::connection($this->transactionConnection())->transaction(function () use ($userId) {
             $periods = app(FiscalPeriodService::class)->ensureThroughCurrentMonth();
 
             $periods = $periods->filter(fn (FiscalPeriod $period) => ! $period->is_closed);
@@ -191,7 +192,7 @@ class ClosingService
      */
     public function reopenMonth($year, $month, $userId = null)
     {
-        return DB::transaction(function () use ($year, $month) {
+        return DB::connection($this->transactionConnection())->transaction(function () use ($year, $month) {
             $period = FiscalPeriod::where('year', $year)
                 ->where('month', $month)
                 ->first();
@@ -224,5 +225,10 @@ class ClosingService
 
             return $period;
         });
+    }
+
+    protected function transactionConnection(): ?string
+    {
+        return app(AccountingConnectionResolver::class)->resolveTransactionDataConnection();
     }
 }

@@ -8,6 +8,7 @@ use ESolution\LaravelAccounting\Models\AccountCategory;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
+use ESolution\LaravelAccounting\Http\Resources\AccountCategoryResource;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
@@ -19,20 +20,43 @@ class AccountCategoryController extends BaseController
     public function index(Request $request, $tenantId = null)
     {
         $this->initializeTenantIfNeeded($tenantId);
-        $treeMode = filter_var($request->query('tree', false), FILTER_VALIDATE_BOOLEAN);
+        $includeAccounts = $this->shouldIncludeAccounts($request);
+        $includeChildren = $this->shouldIncludeChildren($request);
+        $rootOnly = filter_var($request->query('root_only', false), FILTER_VALIDATE_BOOLEAN);
+        $parentId = $this->normalizeParentId($request->query('parent_id'));
 
-        $categories = Cache::tags($this->getCacheTags($tenantId))->rememberForever('index_'.($treeMode ? 'tree' : 'flat'), function () use ($treeMode) {
+        $cacheKey = 'index_'
+            .($includeChildren ? 'tree' : 'flat')
+            .'_parent_'.md5((string) ($parentId ?? '__all__'))
+            .'_root_'.($rootOnly ? '1' : '0')
+            .'_with_'.($includeAccounts ? 'accounts' : 'none');
+
+        $categories = Cache::tags($this->getCacheTags($tenantId))->rememberForever($cacheKey, function () use ($includeAccounts, $includeChildren, $rootOnly, $parentId) {
             $categoryRepository = app(AccountCategoryRepository::class);
-            $accountRepository = app(AccountRepository::class);
+            $treeService = app(AccountCategoryTreeService::class);
             $categories = $categoryRepository->allOrdered();
 
-            if ($treeMode) {
-                return app(AccountCategoryTreeService::class)->getTree($categories);
+            if ($parentId !== null) {
+                $categories = $categories->where('parent_id', $parentId)->values();
+            } elseif ($rootOnly || $includeChildren) {
+                $categories = $categories->whereNull('parent_id')->values();
             }
 
-            return $categoryRepository->attachParentAndChildren(
-                $categoryRepository->attachAccounts($categories, $accountRepository->allOrdered())
-            );
+            $accounts = $includeAccounts ? app(AccountRepository::class)->allOrdered() : collect();
+
+            if ($includeChildren) {
+                $nodes = $categories
+                    ->map(fn (AccountCategory $category) => $treeService->buildNode($category, $categories->merge(app(AccountCategoryRepository::class)->allOrdered())->unique('id')->values(), $accounts))
+                    ->values();
+
+                return $this->stripMissingRelationsFromTree($nodes, $includeAccounts);
+            }
+
+            if ($includeAccounts) {
+                $categories = $categoryRepository->attachAccounts($categories, $accounts);
+            }
+
+            return AccountCategoryResource::collection($categories);
         });
 
         return $this->successResponse('Account categories retrieved successfully', $categories);
@@ -157,5 +181,99 @@ class AccountCategoryController extends BaseController
     {
         Cache::tags($this->getCacheTags($tenantId))->flush();
         Cache::tags(array_merge(['acc_accounts'], $tenantId ? ['acc_accounts_tenant_'.$tenantId] : []))->flush();
+    }
+
+    protected function shouldIncludeAccounts(Request $request): bool
+    {
+        $with = $request->query('with', []);
+
+        if (is_string($with)) {
+            return in_array('accounts', array_map('trim', explode(',', $with)), true);
+        }
+
+        if (! is_array($with)) {
+            return false;
+        }
+
+        $flattened = [];
+        foreach ($with as $value) {
+            if (is_array($value)) {
+                foreach ($value as $nested) {
+                    $flattened[] = (string) $nested;
+                }
+                continue;
+            }
+
+            foreach (explode(',', (string) $value) as $part) {
+                $flattened[] = trim($part);
+            }
+        }
+
+        return in_array('accounts', $flattened, true);
+    }
+
+    protected function normalizeParentId($parentId): ?string
+    {
+        if ($parentId === null) {
+            return null;
+        }
+
+        $parentId = trim((string) $parentId);
+
+        if ($parentId === '' || strtolower($parentId) === 'null') {
+            return null;
+        }
+
+        return $parentId;
+    }
+
+    protected function shouldIncludeChildren(Request $request): bool
+    {
+        $with = $request->query('with', []);
+
+        if (is_string($with)) {
+            return in_array('children', array_map('trim', explode(',', $with)), true);
+        }
+
+        if (! is_array($with)) {
+            return false;
+        }
+
+        $flattened = [];
+        foreach ($with as $value) {
+            if (is_array($value)) {
+                foreach ($value as $nested) {
+                    $flattened[] = (string) $nested;
+                }
+                continue;
+            }
+
+            foreach (explode(',', (string) $value) as $part) {
+                $flattened[] = trim($part);
+            }
+        }
+
+        return in_array('children', $flattened, true);
+    }
+
+    protected function stripMissingRelationsFromTree($tree, bool $includeAccounts = false)
+    {
+        return collect($tree)->map(function ($node) use ($includeAccounts) {
+            if (is_array($node)) {
+                if (! array_key_exists('children', $node)) {
+                    $node['children'] = [];
+                } else {
+                    $node['children'] = $this->stripMissingRelationsFromTree($node['children'])->all();
+                }
+
+                if (! $includeAccounts) {
+                    unset($node['accounts']);
+                }
+
+                return $node;
+            }
+
+            return $node;
+        });
     }
 }

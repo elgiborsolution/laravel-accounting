@@ -2,7 +2,7 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-class MonthlyBalance extends AccountingModel
+class MonthlyBalance extends TransactionDataModel
 {
     protected string $baseTable = 'monthly_balances';
 

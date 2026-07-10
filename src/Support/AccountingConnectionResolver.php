@@ -31,6 +31,15 @@ class AccountingConnectionResolver
         return $this->masterConnectionName();
     }
 
+    public function resolveTransactionDataConnection(?string $explicitConnection = null): ?string
+    {
+        if ($explicitConnection !== null && $explicitConnection !== '') {
+            return $explicitConnection;
+        }
+
+        return DB::getDefaultConnection();
+    }
+
     public function shouldCreateCrossConnectionForeignKeys(?string $currentConnection = null): bool
     {
         if (! $this->useSharedMasterDatabase()) {

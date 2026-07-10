@@ -2,7 +2,7 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-class JournalEntryDetail extends AccountingModel
+class JournalEntryDetail extends TransactionDataModel
 {
     protected string $baseTable = 'journal_entry_details';
 

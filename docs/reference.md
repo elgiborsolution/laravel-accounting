@@ -203,6 +203,118 @@ Controller methods:
 - `destroy()`
 - `toggleStatus()`
 
+#### Query parameters
+
+`GET /api/accounting/categories`
+
+- `with` `string|array` `optional`
+- Supported values: `children`, `accounts`
+- Examples: `with=children`, `with=accounts`, `with=children,accounts`, `with[]=children`, `with[]=accounts`
+- Description: when present, the response includes only the requested relations. Without this parameter, no relations are serialized.
+- `parent_id` `uuid` `optional`
+- Description: when present, only categories whose `parent_id` matches the provided value are returned. The category with `id = parent_id` itself is excluded.
+- `root_only` `boolean` `optional`
+- Default: `false`
+- Description: when `true`, the response returns only root categories where `parent_id` is `null`.
+
+Example:
+
+```http
+GET /api/accounting/categories?root_only=true&with=children,accounts
+```
+
+#### Create category
+
+`POST /api/accounting/categories`
+
+Request body parameters:
+
+- `parent_id` `uuid` `optional`
+- `type` `string` `required`
+- Allowed values: `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, `EXPENSE`
+- Lowercase values are accepted and normalized to uppercase
+- `category_code` `string` `required`
+- Max length: `50`
+- Must be unique
+- `category_name` `string` `required`
+- Max length: `100`
+- `report_type` `string` `optional`
+- Max length: `50`
+- If omitted, the controller defaults to:
+  - `BS` for `ASSET`, `LIABILITY`, `EQUITY`
+  - `PL` for `REVENUE`, `EXPENSE`
+- `sequence_no` `integer` `optional`
+- `status` `boolean` `optional`
+
+Example:
+
+```json
+{
+  "parent_id": null,
+  "type": "ASSET",
+  "category_code": "CASH_CASH_EQUIVALENT",
+  "category_name": "Cash & Cash Equivalent",
+  "report_type": "BS",
+  "sequence_no": 1,
+  "status": true
+}
+```
+
+#### Get category detail
+
+`GET /api/accounting/categories/{id}`
+
+Path parameters:
+
+- `id` `uuid` `required`
+
+The endpoint returns the selected category with its tree node structure.
+
+#### Update category
+
+`PUT /api/accounting/categories/{id}`
+
+Path parameters:
+
+- `id` `uuid` `required`
+
+Request body parameters:
+
+- `parent_id` `uuid` `optional`
+- `type` `string` `optional`
+- Allowed values are the same as create
+- `category_code` `string` `optional`
+- Max length: `50`
+- Must be unique except for the current record
+- `category_name` `string` `optional`
+- Max length: `100`
+- `report_type` `string` `optional`
+- Max length: `50`
+- `sequence_no` `integer` `optional`
+- `status` `boolean` `optional`
+
+If `type` is provided, it is normalized to uppercase. If `report_type` is omitted, the controller infers it from `type` or the existing record.
+
+#### Delete category
+
+`DELETE /api/accounting/categories/{id}`
+
+Path parameters:
+
+- `id` `uuid` `required`
+
+The endpoint rejects deletion when the category still has descendants or linked accounts.
+
+#### Toggle category status
+
+`PATCH /api/accounting/categories/{id}/toggle-status`
+
+Path parameters:
+
+- `id` `uuid` `required`
+
+This endpoint does not require a request body. It flips the `status` value.
+
 ### Accounts
 
 - `GET /api/accounting/accounts`

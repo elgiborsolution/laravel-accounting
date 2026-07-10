@@ -4,7 +4,7 @@ namespace ESolution\LaravelAccounting\Models;
 
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 
-abstract class MasterDataModel extends AccountingModel
+abstract class TransactionDataModel extends AccountingModel
 {
     public function getConnectionName()
     {
@@ -14,6 +14,6 @@ abstract class MasterDataModel extends AccountingModel
             return $connection;
         }
 
-        return app(AccountingConnectionResolver::class)->resolveMasterDataConnection();
+        return app(AccountingConnectionResolver::class)->resolveTransactionDataConnection();
     }
 }

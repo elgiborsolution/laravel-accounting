@@ -2,7 +2,7 @@
 
 namespace ESolution\LaravelAccounting\Models;
 
-class FiscalPeriod extends AccountingModel
+class FiscalPeriod extends TransactionDataModel
 {
     protected string $baseTable = 'fiscal_periods';
 

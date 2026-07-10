@@ -91,7 +91,7 @@ class AccountCategoryRepository
     public function buildTree(?Collection $categories = null, ?Collection $accounts = null): Collection
     {
         $categories = $categories ? $categories->values() : $this->allOrdered();
-        $accounts = $accounts ? $accounts->values() : Account::query()->orderBy('code')->get();
+        $accounts = $accounts === null ? Account::query()->orderBy('code')->get() : $accounts->values();
 
         $categoriesByParent = $categories->groupBy(fn (AccountCategory $category) => $category->parent_id ?? '__root__');
         $accountsByCategory = $accounts->groupBy('category_id');

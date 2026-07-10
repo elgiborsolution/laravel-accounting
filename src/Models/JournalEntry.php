@@ -5,7 +5,7 @@ namespace ESolution\LaravelAccounting\Models;
 use ESolution\LaravelAccounting\Enums\JournalStatus;
 use Exception;
 
-class JournalEntry extends AccountingModel
+class JournalEntry extends TransactionDataModel
 {
     protected string $baseTable = 'journal_entries';
 

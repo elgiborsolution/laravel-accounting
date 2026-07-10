@@ -14,6 +14,7 @@ use ESolution\LaravelAccounting\Repositories\FiscalPeriodRepository;
 use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceAccountRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceRepository;
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use Exception;
 use Illuminate\Support\Carbon;
@@ -39,7 +40,7 @@ class JournalService
     {
         $this->logConnectionSnapshot('journalByMapping:start');
 
-        return DB::transaction(function () use ($data) {
+        return DB::connection($this->transactionConnection())->transaction(function () use ($data) {
             // 1. Validate service_code exists
             $serviceCode = $data['service_code'] ?? null;
             if (! $serviceCode) {
@@ -154,7 +155,7 @@ class JournalService
      */
     public function journalManual(array $data)
     {
-        return DB::transaction(function () use ($data) {
+        return DB::connection($this->transactionConnection())->transaction(function () use ($data) {
             if (! isset($data['items']) || empty($data['items'])) {
                 throw new Exception('Journal items are required');
             }
@@ -244,7 +245,7 @@ class JournalService
      */
     public function reverse($journalId, string $reason)
     {
-        return DB::transaction(function () use ($journalId, $reason) {
+        return DB::connection($this->transactionConnection())->transaction(function () use ($journalId, $reason) {
             $journal = $this->journals->findWithDetails($journalId);
 
             if (! $journal) {
@@ -426,6 +427,7 @@ class JournalService
     protected function logConnectionSnapshot(string $context): void
     {
         Log::debug('[Accounting] '.$context, [
+            'transaction_connection' => $this->transactionConnection(),
             'journal_entry_connection' => (new JournalEntry)->getConnectionName(),
             'journal_detail_connection' => (new JournalEntryDetail)->getConnectionName(),
             'service_connection' => (new \ESolution\LaravelAccounting\Models\Service)->getConnectionName(),
@@ -436,5 +438,10 @@ class JournalService
             'shared_master_enabled' => config('accounting.master_data.use_shared_database', false),
             'master_connection' => config('accounting.master_data.connection'),
         ]);
+    }
+
+    protected function transactionConnection(): ?string
+    {
+        return app(AccountingConnectionResolver::class)->resolveTransactionDataConnection();
     }
 }

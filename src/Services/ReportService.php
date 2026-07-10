@@ -8,6 +8,7 @@ use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Repositories\JournalRepository;
+use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -46,7 +47,7 @@ class ReportService
         if (date('d', strtotime($startDate)) != '01') {
             $prefix = config('accounting.table_prefix', 'acc_');
 
-            $prevTransactions = DB::table($prefix.'journal_entry_details')
+            $prevTransactions = DB::connection($this->transactionConnection())->table($prefix.'journal_entry_details')
                 ->join($prefix.'journal_entries', $prefix.'journal_entries.id', '=', $prefix.'journal_entry_details.journal_entry_id')
                 ->where($prefix.'journal_entry_details.account_id', $accountId)
                 ->where($prefix.'journal_entries.trx_date', '>=', sprintf('%s-%s-01', $startYear, $startMonth))
@@ -234,5 +235,10 @@ class ReportService
         return array_reduce($nodes, function ($carry, $node) {
             return $carry + (float) ($node['balance'] ?? 0);
         }, 0.0);
+    }
+
+    protected function transactionConnection(): ?string
+    {
+        return app(AccountingConnectionResolver::class)->resolveTransactionDataConnection();
     }
 }
