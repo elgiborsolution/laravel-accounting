@@ -56,7 +56,10 @@ $defineRoutes = function ($tenantId = null) {
 };
 
 Route::prefix(config('accounting.route.prefix', 'api/accounting'))
-    ->middleware(config('accounting.route.middleware', ['api']))
+    ->middleware(array_values(array_unique(array_merge(
+        (array) config('accounting.route.middleware', ['api']),
+        ['accounting.api.exceptions']
+    ))))
     ->group(function () use ($defineRoutes) {
         $defineRoutes(false);
         $defineRoutes(true);

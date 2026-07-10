@@ -18,9 +18,11 @@ use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceAccountRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\AccountingExceptionResponder;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\ServiceAccountTemplateRegistry;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
+use ESolution\LaravelAccounting\Http\Middleware\HandleAccountingApiExceptions;
 use Illuminate\Support\ServiceProvider;
 
 class AccountingServiceProvider extends ServiceProvider
@@ -42,6 +44,10 @@ class AccountingServiceProvider extends ServiceProvider
 
         $this->app->singleton(AccountingTableResolver::class, function ($app) {
             return new AccountingTableResolver;
+        });
+
+        $this->app->singleton(AccountingExceptionResponder::class, function ($app) {
+            return new AccountingExceptionResponder;
         });
 
         $this->app->singleton(AccountCategoryRepository::class, fn () => new AccountCategoryRepository);
@@ -126,10 +132,14 @@ class AccountingServiceProvider extends ServiceProvider
                 $app->make(AccountingTableResolver::class)
             );
         });
+
+        $this->app['router']->aliasMiddleware('accounting.api.exceptions', HandleAccountingApiExceptions::class);
     }
 
     public function boot()
     {
+        $this->registerAccountingExceptionRendering();
+
         // Load routes
         $this->loadRoutesFrom(__DIR__.'/../routes/api.php');
 
@@ -146,6 +156,18 @@ class AccountingServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__.'/../database/migrations/accounting/' => database_path('migrations/accounting'),
             ], 'accounting-migrations');
+        }
+    }
+
+    protected function registerAccountingExceptionRendering(): void
+    {
+        $handler = $this->app->make(\Illuminate\Contracts\Debug\ExceptionHandler::class);
+        $responder = $this->app->make(AccountingExceptionResponder::class);
+
+        if (method_exists($handler, 'renderable')) {
+            $handler->renderable(function (\Throwable $e, \Illuminate\Http\Request $request) use ($responder) {
+                return $responder->render($request, $e);
+            });
         }
     }
 }
