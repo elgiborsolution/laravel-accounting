@@ -548,15 +548,29 @@ Query parameters:
 - Supported values:
   - `category`
   - `tree_category`
+  - `balance`
 - `with=category` loads the direct category relation.
 - `with=tree_category` loads the category lineage from root to the account's category.
+- `with=balance` loads the account balance object.
+- `with=category,balance` and `with=tree_category,balance` are supported.
 - Any other value is ignored and no relation is included.
+- `year` optional
+- Used only when `with=balance` is requested.
+- Default: current year
+- `month` optional
+- Used only when `with=balance` is requested.
+- Default: current month
 
 Response body:
 
 - Success envelope with a collection of accounts
 - Default response does not include `category` or `tree_category`
-- When requested, `category` or `tree_category` is serialized on each account
+- When requested, `category`, `tree_category`, and/or `balance` are serialized on each account
+- `balance` contains:
+  - `opening_balance`
+  - `total_debit`
+  - `total_credit`
+  - `ending_balance`
 
 Example response:
 
@@ -572,6 +586,36 @@ Example response:
       "name": "Cash",
       "is_postable": true,
       "status": true
+    }
+  ]
+}
+```
+
+Example with balance:
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/accounts?with=balance&year=2026&month=7' \
+--header 'Accept: application/json'
+```
+
+```json
+{
+  "status": 200,
+  "message": "Accounts retrieved successfully",
+  "data": [
+    {
+      "id": "uuid",
+      "category_id": "uuid",
+      "code": "1001",
+      "name": "Cash",
+      "is_postable": true,
+      "status": true,
+      "balance": {
+        "opening_balance": 1000000,
+        "total_debit": 500000,
+        "total_credit": 250000,
+        "ending_balance": 1250000
+      }
     }
   ]
 }

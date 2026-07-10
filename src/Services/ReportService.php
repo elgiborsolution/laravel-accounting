@@ -8,6 +8,7 @@ use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Repositories\JournalRepository;
+use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -18,7 +19,8 @@ class ReportService
         protected AccountCategoryTreeService $treeService,
         protected AccountCategoryRepository $categories,
         protected AccountRepository $accounts,
-        protected JournalRepository $journals
+        protected JournalRepository $journals,
+        protected AccountingTableResolver $tables
     ) {
     }
 
@@ -35,25 +37,28 @@ class ReportService
         }
 
         $category = $this->categories->findById($account->category_id);
+        $transactionConnection = $this->transactionConnection();
 
         $startYear = date('Y', strtotime($startDate));
         $startMonth = date('m', strtotime($startDate));
 
-        $openingBalance = MonthlyBalance::where('account_id', $accountId)
+        $openingBalance = MonthlyBalance::on($transactionConnection)
+            ->where('account_id', $accountId)
             ->where('fiscal_year', $startYear)
             ->where('fiscal_month', (int) $startMonth)
             ->value('opening_balance') ?? 0;
 
         if (date('d', strtotime($startDate)) != '01') {
-            $prefix = config('accounting.table_prefix', 'acc_');
+            $tablePrefix = $this->tables->tablePrefix();
+            $rawTable = $this->tables->rawTable('journal_entry_details', $transactionConnection);
 
-            $prevTransactions = DB::connection($this->transactionConnection())->table($prefix.'journal_entry_details')
-                ->join($prefix.'journal_entries', $prefix.'journal_entries.id', '=', $prefix.'journal_entry_details.journal_entry_id')
-                ->where($prefix.'journal_entry_details.account_id', $accountId)
-                ->where($prefix.'journal_entries.trx_date', '>=', sprintf('%s-%s-01', $startYear, $startMonth))
-                ->where($prefix.'journal_entries.trx_date', '<', $startDate)
-                ->where($prefix.'journal_entries.status', 'posted')
-                ->select(DB::raw("SUM({$prefix}journal_entry_details.debit) as total_debit, SUM({$prefix}journal_entry_details.credit) as total_credit"))
+            $prevTransactions = DB::connection($transactionConnection)->table($tablePrefix.'journal_entry_details')
+                ->join($tablePrefix.'journal_entries', $tablePrefix.'journal_entries.id', '=', $tablePrefix.'journal_entry_details.journal_entry_id')
+                ->where($tablePrefix.'journal_entry_details.account_id', $accountId)
+                ->where($tablePrefix.'journal_entries.trx_date', '>=', sprintf('%s-%s-01', $startYear, $startMonth))
+                ->where($tablePrefix.'journal_entries.trx_date', '<', $startDate)
+                ->where($tablePrefix.'journal_entries.status', 'posted')
+                ->select(DB::raw("SUM({$rawTable}.debit) as total_debit, SUM({$rawTable}.credit) as total_credit"))
                 ->first();
 
             if (in_array($category->type ?? 'ASSET', ['ASSET', 'EXPENSE'], true)) {
@@ -162,7 +167,8 @@ class ReportService
     protected function buildTreeWithBalances($year, $month): Collection
     {
         $accounts = $this->accounts->allOrdered();
-        $balances = MonthlyBalance::where('fiscal_year', $year)
+        $balances = MonthlyBalance::on($this->transactionConnection())
+            ->where('fiscal_year', $year)
             ->where('fiscal_month', $month)
             ->get()
             ->keyBy('account_id');

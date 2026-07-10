@@ -7,6 +7,7 @@ use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
 use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\JournalEntryDetail;
+use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Models\ReportMapping;
 use ESolution\LaravelAccounting\Models\Service;
 use ESolution\LaravelAccounting\Models\ServiceAccount;
@@ -222,6 +223,65 @@ class AccountingConnectionModesTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('data.id', $journal->id)
             ->assertJsonPath('data.details.0.account.code', '1000');
+    }
+
+    public function test_general_ledger_endpoint_uses_transaction_connection_in_shared_master_mode(): void
+    {
+        $this->useTenantWithSharedMasterMode();
+        $this->createMasterTables('master');
+        $this->createTransactionTables('tenant');
+
+        $category = AccountCategory::create([
+            'type' => 'ASSET',
+            'category_code' => 'CASH_CASH_EQUIVALENT',
+            'category_name' => 'Cash & Cash Equivalent',
+            'report_type' => 'BS',
+            'sequence_no' => 1,
+            'status' => true,
+        ]);
+
+        $account = Account::create([
+            'category_id' => $category->id,
+            'code' => '1000',
+            'name' => 'Cash',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        MonthlyBalance::create([
+            'fiscal_year' => 2026,
+            'fiscal_month' => 7,
+            'account_id' => $account->id,
+            'opening_balance' => 100,
+            'total_debit' => 0,
+            'total_credit' => 0,
+            'ending_balance' => 100,
+            'journal_count' => 0,
+            'closed_at' => null,
+            'closed_by' => null,
+        ]);
+
+        $journal = JournalEntry::create([
+            'journal_no' => 'JV/2026/07/0003',
+            'trx_date' => '2026-07-10',
+            'service_id' => null,
+            'description' => 'General ledger test',
+            'status' => JournalStatus::POSTED,
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $account->id,
+            'debit' => 50,
+            'credit' => 0,
+            'description' => 'Cash receipt',
+        ]);
+
+        $response = $this->getJson("/api/accounting/reports/general-ledger?account_id={$account->id}&start_date=2026-07-15&end_date=2026-07-31");
+
+        $response->assertOk()
+            ->assertJsonPath('data.account.id', $account->id)
+            ->assertJsonPath('data.opening_balance', 150);
     }
 
     public function test_multi_tenant_without_shared_master_keeps_master_data_on_tenant_connection(): void

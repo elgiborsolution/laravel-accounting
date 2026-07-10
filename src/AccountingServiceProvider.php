@@ -3,6 +3,7 @@
 namespace ESolution\LaravelAccounting;
 
 use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
+use ESolution\LaravelAccounting\Services\AccountBalanceService;
 use ESolution\LaravelAccounting\Services\AccountingService;
 use ESolution\LaravelAccounting\Services\ClosingService;
 use ESolution\LaravelAccounting\Services\CoaService;
@@ -17,6 +18,7 @@ use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceAccountRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\ServiceAccountTemplateRegistry;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use Illuminate\Support\ServiceProvider;
@@ -36,6 +38,10 @@ class AccountingServiceProvider extends ServiceProvider
 
         $this->app->singleton(AccountingConnectionResolver::class, function ($app) {
             return new AccountingConnectionResolver;
+        });
+
+        $this->app->singleton(AccountingTableResolver::class, function ($app) {
+            return new AccountingTableResolver;
         });
 
         $this->app->singleton(AccountCategoryRepository::class, fn () => new AccountCategoryRepository);
@@ -86,12 +92,25 @@ class AccountingServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(AccountBalanceService::class, function ($app) {
+            return new AccountBalanceService(
+                $app->make(AccountCategoryRepository::class),
+                $app->make(AccountRepository::class),
+                $app->make(FiscalPeriodRepository::class),
+                $app->make(AccountingConnectionResolver::class),
+                $app->make(AccountingTableResolver::class)
+            );
+        });
+
         $this->app->singleton(MappingService::class, function ($app) {
             return new MappingService($app->make(ServiceAccountRepository::class));
         });
 
         $this->app->singleton(ClosingService::class, function ($app) {
-            return new ClosingService($app->make(AccountCategoryRepository::class));
+            return new ClosingService(
+                $app->make(AccountCategoryRepository::class),
+                $app->make(AccountingTableResolver::class)
+            );
         });
 
         $this->app->singleton(FiscalPeriodService::class, function ($app) {
@@ -103,7 +122,8 @@ class AccountingServiceProvider extends ServiceProvider
                 $app->make(AccountCategoryTreeService::class),
                 $app->make(AccountCategoryRepository::class),
                 $app->make(AccountRepository::class),
-                $app->make(JournalRepository::class)
+                $app->make(JournalRepository::class),
+                $app->make(AccountingTableResolver::class)
             );
         });
     }

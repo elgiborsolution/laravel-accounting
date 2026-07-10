@@ -5,6 +5,7 @@ namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
+use ESolution\LaravelAccounting\Services\AccountBalanceService;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use Illuminate\Http\Request;
@@ -21,13 +22,26 @@ class AccountController extends BaseController
 
         $search = $request->query('search');
         $with = $this->normalizeWithParameter($request->query('with'));
-        $includeCategory = $with === 'category';
-        $includeTreeCategory = $with === 'tree_category';
+        $includeCategory = in_array('category', $with, true);
+        $includeTreeCategory = in_array('tree_category', $with, true);
+        $includeBalance = in_array('balance', $with, true);
+        $balanceYear = (int) $request->query('year', now()->year);
+        $balanceMonth = (int) $request->query('month', now()->month);
         $cacheKey = 'index_'
             .($search ? 'search_'.md5($search) : 'all')
-            .'_with_'.($with ?? 'none');
+            .'_with_'.($with ? implode('-', $with) : 'none')
+            .($includeBalance ? '_period_'.$balanceYear.'_'.$balanceMonth : '');
 
-        $accounts = Cache::tags($this->getCacheTags($tenantId))->rememberForever($cacheKey, function () use ($search, $includeCategory, $includeTreeCategory) {
+        $cacheTags = $this->getCacheTags($tenantId);
+        if ($includeBalance) {
+            $cacheTags = array_values(array_unique(array_merge(
+                $cacheTags,
+                ['acc_account_categories', 'acc_journals'],
+                $tenantId ? ['acc_account_categories_tenant_'.$tenantId, 'acc_journals_tenant_'.$tenantId] : []
+            )));
+        }
+
+        $accounts = Cache::tags($cacheTags)->rememberForever($cacheKey, function () use ($search, $includeCategory, $includeTreeCategory, $includeBalance, $balanceYear, $balanceMonth) {
             $data = Account::when($search, function ($query, $search) {
                 $query->where('code', 'like', "%{$search}%")
                     ->orWhere('name', 'like', "%{$search}%");
@@ -35,12 +49,16 @@ class AccountController extends BaseController
                 ->orderBy('code')
                 ->get();
 
-            if ($includeTreeCategory) {
-                return $this->attachTreeCategories($data);
+            if ($includeCategory) {
+                $data = app(AccountRepository::class)->attachCategories($data);
             }
 
-            if ($includeCategory) {
-                return app(AccountRepository::class)->attachCategories($data);
+            if ($includeTreeCategory) {
+                $data = $this->attachTreeCategories($data);
+            }
+
+            if ($includeBalance) {
+                $data = $this->attachBalances($data, $balanceYear, $balanceMonth);
             }
 
             return $data;
@@ -75,10 +93,27 @@ class AccountController extends BaseController
         }
         $this->initializeTenantIfNeeded($tenantId);
 
-        $account = Cache::tags($this->getCacheTags($tenantId))->rememberForever('show_'.$id, function () use ($id) {
-            $acc = Account::findOrFail($id);
+        $balanceYear = (int) $request->query('year', now()->year);
+        $balanceMonth = (int) $request->query('month', now()->month);
+        $cacheKey = 'show_'.$id.'_period_'.$balanceYear.'_'.$balanceMonth;
 
-            return app(AccountRepository::class)->attachCategories(collect([$acc]))->first();
+        $cacheTags = $this->getCacheTags($tenantId);
+        $cacheTags = array_values(array_unique(array_merge(
+            $cacheTags,
+            ['acc_account_categories', 'acc_journals'],
+            $tenantId ? ['acc_account_categories_tenant_'.$tenantId, 'acc_journals_tenant_'.$tenantId] : []
+        )));
+
+        $account = Cache::tags($cacheTags)->rememberForever($cacheKey, function () use ($id, $balanceYear, $balanceMonth) {
+            $acc = Account::findOrFail($id);
+            $acc = app(AccountRepository::class)->attachCategories(collect([$acc]))->first();
+            $balance = app(AccountBalanceService::class)->getBalances([$acc->id], $balanceYear, $balanceMonth)->get($acc->id);
+
+            if ($balance) {
+                $acc->setRelation('balance', collect($balance));
+            }
+
+            return $acc;
         });
 
         return $this->successResponse('Account retrieved successfully', $account);
@@ -146,7 +181,7 @@ class AccountController extends BaseController
         Cache::tags(array_merge(['acc_account_categories'], $tenantId ? ['acc_account_categories_tenant_'.$tenantId] : []))->flush();
     }
 
-    protected function normalizeWithParameter(mixed $with): ?string
+    protected function normalizeWithParameter(mixed $with): array
     {
         if (is_array($with)) {
             $values = [];
@@ -169,16 +204,14 @@ class AccountController extends BaseController
         } elseif (is_string($with)) {
             $with = array_map('trim', explode(',', $with));
         } else {
-            return null;
+            return [];
         }
 
         $with = array_values(array_filter($with, fn ($item) => $item !== ''));
+        $with = array_values(array_intersect($with, ['category', 'tree_category', 'balance']));
+        sort($with);
 
-        if (count($with) !== 1) {
-            return null;
-        }
-
-        return in_array($with[0], ['category', 'tree_category'], true) ? $with[0] : null;
+        return $with;
     }
 
     protected function attachTreeCategories($accounts)
@@ -195,6 +228,25 @@ class AccountController extends BaseController
 
             $category->setRelation('tree_category', $categoryRepository->buildLineage($category));
             $account->setRelation('tree_category', $category->getRelation('tree_category'));
+
+            return $account;
+        });
+    }
+
+    protected function attachBalances($accounts, int $year, int $month)
+    {
+        $balanceMap = app(AccountBalanceService::class)->getBalances(
+            $accounts->pluck('id')->all(),
+            $year,
+            $month
+        );
+
+        return $accounts->map(function (Account $account) use ($balanceMap) {
+            $balance = $balanceMap->get($account->id);
+
+            if ($balance) {
+                $account->setRelation('balance', collect($balance));
+            }
 
             return $account;
         });

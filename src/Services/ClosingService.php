@@ -8,22 +8,37 @@ use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use Exception;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class ClosingService
 {
-    public function __construct(protected AccountCategoryRepository $categories) {}
+    public function __construct(
+        protected AccountCategoryRepository $categories,
+        protected AccountingTableResolver $tables
+    ) {}
 
     protected function journalTable(): string
     {
-        return config('accounting.table_prefix', 'acc_').'journal_entries';
+        return $this->tables->table('journal_entries');
     }
 
     protected function journalDetailTable(): string
     {
-        return config('accounting.table_prefix', 'acc_').'journal_entry_details';
+        return $this->tables->table('journal_entry_details');
+    }
+
+    protected function journalTableRaw(): string
+    {
+        return $this->tables->connectionTable('journal_entries', $this->transactionConnection());
+    }
+
+    protected function journalDetailTableRaw(): string
+    {
+        return $this->tables->connectionTable('journal_entry_details', $this->transactionConnection());
     }
 
     protected function wrapTable(string $table): string
@@ -55,8 +70,8 @@ class ClosingService
             // 2. Validate journals are balanced
             $journalTable = $this->journalTable();
             $detailTable = $this->journalDetailTable();
-            $journalTableWrapped = $this->wrapTable($journalTable);
-            $detailTableWrapped = $this->wrapTable($detailTable);
+            $journalTableWrapped = $this->wrapTable($this->journalTableRaw());
+            $detailTableWrapped = $this->wrapTable($this->journalDetailTableRaw());
 
             $totals = DB::table($journalTable)
                 ->join($detailTable, "{$journalTable}.id", '=', "{$detailTable}.journal_entry_id")
@@ -151,6 +166,8 @@ class ClosingService
                 'closed_by' => $userId,
             ]);
 
+            $this->clearCache();
+
             return $period;
         });
     }
@@ -223,6 +240,8 @@ class ClosingService
                 'closed_by' => null,
             ]);
 
+            $this->clearCache();
+
             return $period;
         });
     }
@@ -230,5 +249,26 @@ class ClosingService
     protected function transactionConnection(): ?string
     {
         return app(AccountingConnectionResolver::class)->resolveTransactionDataConnection();
+    }
+
+    protected function clearCache(): void
+    {
+        $tags = ['acc_journals'];
+        $tenantId = $this->getTenantId();
+
+        if ($tenantId) {
+            $tags[] = 'acc_journals_tenant_'.$tenantId;
+        }
+
+        Cache::tags($tags)->flush();
+    }
+
+    protected function getTenantId(): ?string
+    {
+        if (function_exists('tenancy') && tenancy()->initialized) {
+            return tenancy()->tenant->id;
+        }
+
+        return null;
     }
 }
