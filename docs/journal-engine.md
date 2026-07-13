@@ -15,9 +15,8 @@ The `acc_journal_entries.status` column supports:
 Draft journals are created by:
 
 - `JournalService::journalByMapping()`
-- `JournalService::journalManual()`
 
-In the current implementation, both methods create a journal with `status = draft` and detail rows, then optionally auto-post it if `accounting.journal.auto_post` is enabled.
+`journalByMapping()` creates a journal with `status = draft` and detail rows, then optionally auto-posts it if `accounting.journal.auto_post` is enabled.
 
 `journalByMapping()` resolves master data first through repositories, so service and mapping lookup can target a shared master connection while the journal header and details stay on the active application or tenant connection.
 
@@ -86,9 +85,11 @@ It:
 - resolves account IDs from `account_id` or `account_code`
 - validates debit/credit types
 - checks balance
+- validates account activity and postable status
+- checks the fiscal period lock
 - writes the journal header
 - writes detail rows
-- auto-posts when configured
+- posts the journal immediately
 
 ## State Transitions
 

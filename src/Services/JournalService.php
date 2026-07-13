@@ -21,6 +21,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 class JournalService
 {
@@ -156,34 +157,62 @@ class JournalService
     public function journalManual(array $data)
     {
         return DB::connection($this->transactionConnection())->transaction(function () use ($data) {
-            if (! isset($data['items']) || empty($data['items'])) {
-                throw new Exception('Journal items are required');
+            $detailItems = collect($data['details'] ?? $data['items'] ?? [])->values();
+
+            if ($detailItems->count() < 2) {
+                throw ValidationException::withMessages([
+                    'details' => ['At least 2 journal detail lines are required.'],
+                ]);
             }
 
             $totalDebit = 0;
             $totalCredit = 0;
-            $details = [];
+            $journalDetails = [];
+            $errors = [];
+            $trxDate = isset($data['trx_date']) ? Carbon::parse($data['trx_date']) : now();
 
-            foreach ($data['items'] as $index => $item) {
+            try {
+                $this->checkPeriodLocked($trxDate);
+            } catch (AccountingPeriodLockedException $e) {
+                throw ValidationException::withMessages([
+                    'trx_date' => [$e->getMessage()],
+                ]);
+            }
+
+            foreach ($detailItems as $index => $item) {
                 // 1. Resolve Account ID
                 $accountId = $item['account_id'] ?? null;
                 $accountCode = $item['account_code'] ?? null;
 
                 if (! $accountId && ! $accountCode) {
-                    throw new Exception("Item at index {$index} must have either account_id or account_code");
+                    $errors["details.{$index}.account_id"][] = 'Either account_id or account_code is required.';
+                    continue;
                 }
 
                 if (! $accountId) {
                     $account = $this->accounts->findByCode($accountCode);
                     if (! $account) {
-                        throw new Exception("Account code not found: {$accountCode}");
+                        $errors["details.{$index}.account_id"][] = "Account code not found: {$accountCode}";
+                        continue;
                     }
                     $accountId = $account->id;
                 } else {
-                    // Verify ID exists if provided
-                    if (! $this->accounts->findById($accountId)) {
-                        throw new Exception("Account ID not found: {$accountId}");
+                    $account = $this->accounts->findById($accountId);
+
+                    if (! $account) {
+                        $errors["details.{$index}.account_id"][] = "Account ID not found: {$accountId}";
+                        continue;
                     }
+                }
+
+                if (! $account->status) {
+                    $errors["details.{$index}.account_id"][] = "Account is inactive: {$accountId}";
+                    continue;
+                }
+
+                if (! $account->is_postable) {
+                    $errors["details.{$index}.account_id"][] = "Account is not postable: {$accountId}";
+                    continue;
                 }
 
                 // 2. Calculate Debit/Credit
@@ -194,7 +223,13 @@ class JournalService
                 $isCredit = in_array($type, ['k', 'credit']);
 
                 if (! $isDebit && ! $isCredit) {
-                    throw new Exception("Item at index {$index} must have a valid type (D/Debit or K/Credit)");
+                    $errors["details.{$index}.type"][] = 'The type must be D or K.';
+                    continue;
+                }
+
+                if (! is_numeric($amount) || $amount <= 0) {
+                    $errors["details.{$index}.amount"][] = 'The amount must be greater than 0.';
+                    continue;
                 }
 
                 $debit = $isDebit ? $amount : 0;
@@ -203,7 +238,7 @@ class JournalService
                 $totalDebit += $debit;
                 $totalCredit += $credit;
 
-                $details[] = [
+                $journalDetails[] = [
                     'account_id' => $accountId,
                     'debit' => $debit,
                     'credit' => $credit,
@@ -211,27 +246,34 @@ class JournalService
                 ];
             }
 
-            $trxDate = isset($data['trx_date']) ? Carbon::parse($data['trx_date']) : now();
-
-            $this->checkPeriodLocked($trxDate);
+            if ($errors !== []) {
+                throw ValidationException::withMessages($errors);
+            }
 
             if (round($totalDebit, 2) !== round($totalCredit, 2)) {
-                throw new Exception("Journal is not balanced. Total Debit: $totalDebit, Total Credit: $totalCredit");
+                throw ValidationException::withMessages([
+                    'details' => ["Journal is not balanced. Total Debit: $totalDebit, Total Credit: $totalCredit"],
+                ]);
             }
+
+            $journalNo = $this->generateJournalNo($trxDate);
+            $referenceNo = trim((string) ($data['reference_no'] ?? ''));
 
             $journal = JournalEntry::create([
-                'journal_no' => $this->generateJournalNo($trxDate),
+                'journal_no' => $journalNo,
                 'trx_date' => $trxDate,
+                'service_id' => null,
+                'source_type' => 'MANUAL_JOURNAL',
+                'source_id' => null,
+                'reference_no' => $referenceNo !== '' ? $referenceNo : $journalNo,
                 'description' => $data['description'] ?? null,
-                'status' => JournalStatus::DRAFT,
+                'status' => JournalStatus::POSTED,
+                'posted_at' => now(),
+                'posted_by' => auth()->id() ?? null,
             ]);
 
-            foreach ($details as $detail) {
+            foreach ($journalDetails as $detail) {
                 JournalEntryDetail::create($detail + ['journal_entry_id' => $journal->id]);
-            }
-
-            if (config('accounting.journal.auto_post', true)) {
-                $this->post($journal->id);
             }
 
             $this->clearCache();

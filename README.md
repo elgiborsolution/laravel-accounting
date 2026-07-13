@@ -203,23 +203,24 @@ $salesServices = Accounting::catalog()->sales();
 
 ### Create a manual journal
 
-[`JournalService::journalManual()`](./src/Services/JournalService.php) accepts balanced debit/credit lines and creates a journal entry with details.
+[`JournalService::journalManual()`](./src/Services/JournalService.php) accepts balanced debit/credit lines, validates account state and fiscal period, and creates a posted journal entry with details.
 
 ```php
 use ESolution\LaravelAccounting\Services\JournalService;
 
 $journal = app(JournalService::class)->journalManual([
     'trx_date' => '2026-01-15',
+    'reference_no' => 'JU-20260115-0001',
     'description' => 'Office expense payment',
-    'items' => [
+    'details' => [
         [
-            'account_code' => '5100',
+            'account_id' => 'uuid-account-1',
             'type' => 'D',
             'amount' => 150000,
             'description' => 'Office supplies',
         ],
         [
-            'account_code' => '1000',
+            'account_id' => 'uuid-account-2',
             'type' => 'K',
             'amount' => 150000,
             'description' => 'Cash payment',
