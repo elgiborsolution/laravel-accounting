@@ -3,15 +3,43 @@
 namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
+use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use ESolution\LaravelAccounting\Services\JournalService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\Rule;
 
 class JournalController extends BaseController
 {
     protected $cacheKey = 'acc_journals';
+
+    public function store(Request $request, $tenantId = null)
+    {
+        $this->initializeTenantIfNeeded($tenantId);
+
+        $validated = $request->validate([
+            'trx_date' => 'required|date',
+            'reference_no' => 'nullable|string|max:100',
+            'description' => 'nullable|string',
+            'details' => 'required|array|min:2',
+            'details.*.account_id' => ['required', Rule::exists(Account::validationTable(), 'id')],
+            'details.*.type' => 'required|in:D,K',
+            'details.*.amount' => 'required|numeric|gt:0',
+            'details.*.description' => 'nullable|string',
+        ]);
+
+        $journal = app(JournalService::class)->journalManual($validated);
+
+        return $this->successResponse('Manual journal created successfully', [
+            'id' => $journal->id,
+            'journal_no' => $journal->journal_no,
+            'trx_date' => $journal->trx_date?->toDateString(),
+            'reference_no' => $journal->reference_no,
+            'status' => $journal->status instanceof \BackedEnum ? $journal->status->value : $journal->status,
+        ], 201);
+    }
 
     public function index(Request $request, $tenantId = null)
     {

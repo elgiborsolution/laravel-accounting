@@ -100,7 +100,7 @@ Behavior notes:
 
 - `journalByMapping()` resolves the service and mappings through repositories, requires `service_code`, and balanced items.
 - `journalByMapping()` is safe for shared master database setups because it does not depend on cross-connection `whereHas()` or eager loading against master tables.
-- `journalManual()` creates a balanced draft journal from arbitrary accounts.
+- `journalManual()` creates a balanced manual journal from arbitrary accounts, validates account state and fiscal period, and posts it immediately.
 - `reverse()` creates a brand-new reversal journal and does not edit the original posted journal.
 - `post()` is idempotent for already-posted journals.
 
@@ -242,6 +242,7 @@ Public methods:
 | ServiceController | DELETE | `/api/accounting/services/{id}` |
 | ServiceController | PATCH | `/api/accounting/services/{id}/toggle-status` |
 | JournalController | GET | `/api/accounting/journals` |
+| JournalController | POST | `/api/accounting/journals` |
 | JournalController | GET | `/api/accounting/journals/{id}` |
 | JournalController | POST | `/api/accounting/journals/{id}/reverse` |
 | ReportController | GET | `/api/accounting/reports/general-ledger` |
@@ -973,6 +974,113 @@ Example response:
 ```
 
 ## Journals
+
+### POST `/api/accounting/journals`
+
+Description: creates a manual journal entry without `service_id` or `mapping_key`.
+
+Authentication: package-level auth is not enforced.
+
+Request body:
+
+```json
+{
+  "trx_date": "2026-07-13",
+  "reference_no": "JU-20260713-0001",
+  "description": "Jurnal penyesuaian akhir bulan",
+  "details": [
+    {
+      "account_id": "uuid-account-1",
+      "type": "D",
+      "amount": 1000000,
+      "description": "Kas"
+    },
+    {
+      "account_id": "uuid-account-2",
+      "type": "K",
+      "amount": 1000000,
+      "description": "Modal"
+    }
+  ]
+}
+```
+
+Validation rules:
+
+- `trx_date` required|date
+- `reference_no` nullable|string|max:100
+- `description` nullable|string
+- `details` required|array|min:2
+- `details.*.account_id` required and must exist in `acc_accounts`
+- `details.*.type` required|in:D,K
+- `details.*.amount` required|numeric|gt:0
+- `details.*.description` nullable|string
+- Total debit must equal total credit
+- Account must be active
+- Account must be postable
+- Fiscal period must be open
+
+Success response:
+
+```json
+{
+  "status": 201,
+  "message": "Manual journal created successfully",
+  "data": {
+    "id": "uuid",
+    "journal_no": "JV/2026/07/0001",
+    "trx_date": "2026-07-13",
+    "reference_no": "JU-20260713-0001",
+    "status": "posted"
+  }
+}
+```
+
+Validation and domain errors:
+
+- Laravel returns the standard JSON validation payload for request validation failures.
+- Service-level validation failures also return a 422 response with `errors` keyed by the invalid field.
+- A closed fiscal period returns a 422 validation response for `trx_date`.
+
+Error response example:
+
+```json
+{
+  "message": "The given data was invalid.",
+  "errors": {
+    "details.0.account_id": [
+      "Account is inactive: uuid-account-1"
+    ]
+  }
+}
+```
+
+Example request:
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/journals' \
+--header 'Accept: application/json' \
+--header 'Content-Type: application/json' \
+--data '{
+  "trx_date": "2026-07-13",
+  "reference_no": "JU-20260713-0001",
+  "description": "Jurnal penyesuaian akhir bulan",
+  "details": [
+    {
+      "account_id": "uuid-account-1",
+      "type": "D",
+      "amount": 1000000,
+      "description": "Kas"
+    },
+    {
+      "account_id": "uuid-account-2",
+      "type": "K",
+      "amount": 1000000,
+      "description": "Modal"
+    }
+  ]
+}'
+```
 
 ### GET `/api/accounting/journals`
 

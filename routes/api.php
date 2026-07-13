@@ -41,6 +41,7 @@ $defineRoutes = function ($tenantId = null) {
     Route::patch($prefix.'services/{id}/toggle-status', [ServiceController::class, 'toggleStatus']);
 
     // Journals
+    Route::post($prefix.'journals', [JournalController::class, 'store'])->name($tenantId ? 'tenant.journals.store' : 'journals.store');
     Route::get($prefix.'journals', [JournalController::class, 'index'])->name($tenantId ? 'tenant.journals.index' : 'journals.index');
     Route::get($prefix.'journals/{id}', [JournalController::class, 'show'])->name($tenantId ? 'tenant.journals.show' : 'journals.show');
     Route::post($prefix.'journals/{id}/reverse', [JournalController::class, 'reverse'])->name($tenantId ? 'tenant.journals.reverse' : 'journals.reverse');
