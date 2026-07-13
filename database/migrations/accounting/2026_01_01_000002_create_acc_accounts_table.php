@@ -35,7 +35,9 @@ return new class extends Migration
                 ->references('id')
                 ->on($tablePrefix.'account_categories')
                 ->cascadeOnDelete();
+        });
 
+        $this->schema()->table($table, function (Blueprint $blueprint) use ($tablePrefix) {
             $blueprint->foreign('parent_id')
                 ->references('id')
                 ->on($tablePrefix.'accounts')
@@ -47,6 +49,12 @@ return new class extends Migration
     {
         $tablePrefix = config('accounting.table_prefix', 'acc_');
         $table = $tablePrefix.'accounts';
+
+        if ($this->tableExists($table) && $this->columnExists($table, 'parent_id')) {
+            $this->schema()->table($table, function (Blueprint $blueprint) use ($tablePrefix) {
+                $blueprint->dropForeign($tablePrefix.'accounts_parent_id_foreign');
+            });
+        }
 
         $this->schema()->dropIfExists($table);
     }
