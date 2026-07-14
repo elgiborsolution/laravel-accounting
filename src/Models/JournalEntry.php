@@ -17,6 +17,7 @@ class JournalEntry extends TransactionDataModel
         'source_id',
         'reference_no',
         'description',
+        'amount',
         'status',
         'posted_by',
         'posted_at',
@@ -28,6 +29,7 @@ class JournalEntry extends TransactionDataModel
 
     protected $casts = [
         'trx_date' => 'date',
+        'amount' => 'decimal:2',
         'status' => JournalStatus::class,
         'posted_at' => 'datetime',
         'reversed_at' => 'datetime',

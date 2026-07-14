@@ -91,6 +91,45 @@ It:
 - writes detail rows
 - posts the journal immediately
 
+## Opening Balance Journal
+
+`JournalService::journalOpeningBalance()` is the opening-balance workflow for setting multiple account balances at once.
+
+It:
+
+- validates every account exists, is active, and is postable
+- rejects duplicate account rows
+- checks the fiscal period lock
+- rejects duplicate opening-balance creation with `source_type = OPENING_BALANCE`
+- maps signed amounts to debit or credit based on the account category normal balance
+- creates exactly one posted journal
+- stores the total journal amount in `acc_journal_entries.amount`
+- calls `JournalService::journalManual()` internally so the package keeps a single journal creation path
+
+Copyable example payload:
+
+```json
+{
+  "trx_date": "2026-01-01",
+  "reference_no": "OPENING-2026",
+  "description": "Opening Balance Tahun 2026",
+  "details": [
+    {
+      "account_id": "uuid-account-1",
+      "amount": 1000000
+    },
+    {
+      "account_id": "uuid-account-2",
+      "amount": -500000
+    },
+    {
+      "account_id": "uuid-account-3",
+      "amount": 2500000
+    }
+  ]
+}
+```
+
 ## State Transitions
 
 ```text

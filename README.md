@@ -23,6 +23,7 @@ The package also ships with API controllers, reusable services, seeders, a facto
 - Account category management with status toggling
 - Business service definitions with debit/credit mappings
 - Journal storage with validation and auto-posting
+- Opening balance setting across multiple accounts in one journal
 - Journal number generation using a configurable format
 - Fiscal period locking to prevent posting into closed periods
 - Monthly closing and reopening
@@ -164,6 +165,7 @@ return [
 - `journal.number_format` is used by `JournalService::generateJournalNo()` to build the journal number.
 - `fiscal.start_month` is present for fiscal-year configuration.
 - `route.prefix` and `route.middleware` control package API routing.
+- Journal headers now store `amount` as the total nominal journal value.
 
 Shared master mode does not change the public API. When it is disabled, the package keeps using the active application or tenant connection exactly as before.
 
@@ -227,6 +229,55 @@ $journal = app(JournalService::class)->journalManual([
         ],
     ],
 ]);
+```
+
+### Create an opening balance journal
+
+[`JournalService::journalOpeningBalance()`](./src/Services/JournalService.php) creates one posted journal for opening balances across multiple accounts. The package determines debit/credit placement from each account category type and stores the total journal amount in the journal header.
+
+Copyable JSON payload:
+
+```json
+{
+  "trx_date": "2026-01-01",
+  "reference_no": "OPENING-2026",
+  "description": "Opening Balance Tahun 2026",
+  "details": [
+    {
+      "account_id": "uuid-1",
+      "amount": 1000000
+    },
+    {
+      "account_id": "uuid-2",
+      "amount": -500000
+    },
+    {
+      "account_id": "uuid-3",
+      "amount": 2500000
+    }
+  ]
+}
+```
+
+Example:
+
+- Positive values follow the account's normal balance.
+- Negative values mean the reverse of the account's normal balance.
+- The API rejects duplicate accounts, inactive accounts, non-postable accounts, closed fiscal periods, and unbalanced totals.
+
+```json
+{
+  "status": 201,
+  "message": "Opening balance created successfully",
+  "data": {
+    "id": "uuid",
+    "journal_no": "JV/2026/01/0001",
+    "trx_date": "2026-01-01",
+    "reference_no": "OPENING-2026",
+    "amount": 5000000,
+    "status": "posted"
+  }
+}
 ```
 
 ### Create a journal from a mapped service
@@ -771,6 +822,7 @@ These methods are available through the package but are not exposed as routes in
 
 - [`JournalService::journalByMapping(array $data)`](./src/Services/JournalService.php)
 - [`JournalService::journalManual(array $data)`](./src/Services/JournalService.php)
+- [`JournalService::journalOpeningBalance(array $data)`](./src/Services/JournalService.php)
 - [`JournalService::post($id)`](./src/Services/JournalService.php)
 - [`CoaService::createAccount(array $data)`](./src/Services/CoaService.php)
 - [`CoaService::getTree()`](./src/Services/CoaService.php)
@@ -807,6 +859,7 @@ Financial Reports
 2. The account mapping engine validates the selected service and loads its debit/credit mapping rules.
 3. `JournalService` validates that every entry is balanced and that the fiscal period is not closed.
 4. A journal header is created in `acc_journal_entries`, with detail lines stored in `acc_journal_entry_details`.
+   - Journal headers also store `amount`, which equals the total debit/credit amount for the journal.
 5. If `accounting.journal.auto_post` is enabled, the journal is immediately marked as `posted`.
 6. `ClosingService` aggregates posted journal activity into `acc_monthly_balances` for each posting account.
 7. `ReportService` reads posting-account balances and rolls them up through `acc_account_categories.parent_id` to generate category-tree based reports.

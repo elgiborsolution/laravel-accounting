@@ -513,6 +513,7 @@ class AccountingConnectionModesTest extends TestCase
             $table->uuid('source_id')->nullable();
             $table->string('reference_no', 100)->nullable();
             $table->text('description')->nullable();
+            $table->decimal('amount', 18, 2)->default(0);
             $table->string('status', 20)->default('draft');
             $table->uuid('posted_by')->nullable();
             $table->timestamp('posted_at')->nullable();

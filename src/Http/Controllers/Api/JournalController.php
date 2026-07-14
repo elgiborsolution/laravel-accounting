@@ -41,6 +41,32 @@ class JournalController extends BaseController
         ], 201);
     }
 
+    public function openingBalance(Request $request, $tenantId = null)
+    {
+        $this->initializeTenantIfNeeded($tenantId);
+
+        $validated = $request->validate([
+            'trx_date' => 'required|date',
+            'reference_no' => 'nullable|string|max:100',
+            'description' => 'nullable|string',
+            'details' => 'required|array|min:2',
+            'details.*.account_id' => ['required', Rule::exists(Account::validationTable(), 'id')],
+            'details.*.amount' => 'required|numeric|not_in:0',
+            'details.*.description' => 'nullable|string',
+        ]);
+
+        $journal = app(JournalService::class)->journalOpeningBalance($validated);
+
+        return $this->successResponse('Opening balance created successfully', [
+            'id' => $journal->id,
+            'journal_no' => $journal->journal_no,
+            'trx_date' => $journal->trx_date?->toDateString(),
+            'reference_no' => $journal->reference_no,
+            'amount' => (float) $journal->amount,
+            'status' => $journal->status instanceof \BackedEnum ? $journal->status->value : $journal->status,
+        ], 201);
+    }
+
     public function index(Request $request, $tenantId = null)
     {
         $this->initializeTenantIfNeeded($tenantId);

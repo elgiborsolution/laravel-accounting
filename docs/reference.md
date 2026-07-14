@@ -93,6 +93,7 @@ File: [`src/Services/JournalService.php`](/c:/laragon/www/package-custom/laravel
 
 - `journalByMapping(array $data)`
 - `journalManual(array $data)`
+- `journalOpeningBalance(array $data)`
 - `reverse($journalId, string $reason)`
 - `post($id)`
 
@@ -101,6 +102,7 @@ Behavior notes:
 - `journalByMapping()` resolves the service and mappings through repositories, requires `service_code`, and balanced items.
 - `journalByMapping()` is safe for shared master database setups because it does not depend on cross-connection `whereHas()` or eager loading against master tables.
 - `journalManual()` creates a balanced manual journal from arbitrary accounts, validates account state and fiscal period, and posts it immediately.
+- `journalOpeningBalance()` creates one posted journal for opening balances, derives debit/credit placement from account category normal balance, and rejects duplicate opening-balance creation.
 - `reverse()` creates a brand-new reversal journal and does not edit the original posted journal.
 - `post()` is idempotent for already-posted journals.
 
@@ -241,6 +243,7 @@ Public methods:
 | ServiceController | PUT | `/api/accounting/services/{id}` |
 | ServiceController | DELETE | `/api/accounting/services/{id}` |
 | ServiceController | PATCH | `/api/accounting/services/{id}/toggle-status` |
+| JournalController | POST | `/api/accounting/opening-balances` |
 | JournalController | GET | `/api/accounting/journals` |
 | JournalController | POST | `/api/accounting/journals` |
 | JournalController | GET | `/api/accounting/journals/{id}` |
@@ -1081,6 +1084,99 @@ curl --location 'http://127.0.0.1:8000/api/accounting/journals' \
   ]
 }'
 ```
+
+### POST `/api/accounting/opening-balances`
+
+Description: creates one opening-balance journal for multiple accounts in a single transaction.
+
+Authentication: package-level auth is not enforced.
+
+Request body:
+
+```json
+{
+  "trx_date": "2026-01-01",
+  "reference_no": "OPENING-2026",
+  "description": "Opening Balance Tahun 2026",
+  "details": [
+    {
+      "account_id": "uuid-account-1",
+      "amount": 1000000
+    },
+    {
+      "account_id": "uuid-account-2",
+      "amount": -500000
+    },
+    {
+      "account_id": "uuid-account-3",
+      "amount": 2500000
+    }
+  ]
+}
+```
+
+Validation rules:
+
+- `trx_date` required|date
+- `reference_no` nullable|string|max:100
+- `description` nullable|string
+- `details` required|array|min:2
+- `details.*.account_id` required and must exist in `acc_accounts`
+- `details.*.amount` required|numeric|not_in:0
+- `details.*.description` nullable|string
+- All accounts must exist, be active, and be postable
+- Duplicate accounts are rejected
+- Fiscal period must be open
+- The total debit must equal the total credit after the package maps signed amounts using the account category normal balance
+- Opening balance can only be created once per database or tenant because the package checks `source_type = OPENING_BALANCE`
+
+Success response:
+
+```json
+{
+  "status": 201,
+  "message": "Opening balance created successfully",
+  "data": {
+    "id": "uuid",
+    "journal_no": "JV/2026/01/0001",
+    "trx_date": "2026-01-01",
+    "reference_no": "OPENING-2026",
+    "amount": 5000000,
+    "status": "posted"
+  }
+}
+```
+
+Copyable example payload:
+
+```json
+{
+  "trx_date": "2026-01-01",
+  "reference_no": "OPENING-2026",
+  "description": "Opening Balance Tahun 2026",
+  "details": [
+    {
+      "account_id": "uuid-account-1",
+      "amount": 1000000
+    },
+    {
+      "account_id": "uuid-account-2",
+      "amount": -500000
+    },
+    {
+      "account_id": "uuid-account-3",
+      "amount": 2500000
+    }
+  ]
+}
+```
+
+Notes:
+
+- Positive values follow the normal balance of the account category.
+- Negative values reverse the normal balance.
+- The package creates one journal entry only, not one journal per account.
+- The implementation uses a database transaction and calls `JournalService::journalManual()` internally.
 
 ### GET `/api/accounting/journals`
 

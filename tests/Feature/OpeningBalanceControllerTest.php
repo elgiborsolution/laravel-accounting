@@ -6,15 +6,13 @@ use ESolution\LaravelAccounting\Enums\JournalStatus;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
-use ESolution\LaravelAccounting\Models\JournalEntry;
-use ESolution\LaravelAccounting\Models\JournalEntryDetail;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
-class ManualJournalControllerTest extends TestCase
+class OpeningBalanceControllerTest extends TestCase
 {
     protected function setUp(): void
     {
@@ -25,83 +23,89 @@ class ManualJournalControllerTest extends TestCase
         $this->configureSqliteConnection('master');
     }
 
-    public function test_it_creates_a_manual_journal_successfully_in_single_database_mode(): void
+    public function test_it_creates_opening_balance_successfully_in_single_database_mode(): void
     {
         $this->useSingleDatabaseMode('single');
         $this->createAllAccountingTables('single');
 
-        [$debitAccount, $creditAccount] = $this->seedPostingAccounts('single');
+        [$assetAccount, $liabilityAccount, $equityAccount] = $this->seedOpeningBalanceAccounts('single');
 
-        $response = $this->postJson('/api/accounting/journals', [
-            'trx_date' => '2026-07-13',
-            'reference_no' => 'JU-20260713-0001',
-            'description' => 'Jurnal penyesuaian akhir bulan',
+        $response = $this->postJson('/api/accounting/opening-balances', [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-2026',
+            'description' => 'Opening Balance Tahun 2026',
             'details' => [
                 [
-                    'account_id' => $debitAccount->id,
-                    'type' => 'D',
+                    'account_id' => $assetAccount->id,
                     'amount' => 1000000,
-                    'description' => 'Kas',
                 ],
                 [
-                    'account_id' => $creditAccount->id,
-                    'type' => 'K',
-                    'amount' => 1000000,
-                    'description' => 'Modal',
+                    'account_id' => $liabilityAccount->id,
+                    'amount' => -500000,
+                ],
+                [
+                    'account_id' => $equityAccount->id,
+                    'amount' => 1500000,
                 ],
             ],
         ]);
 
         $response->assertCreated()
-            ->assertJsonPath('message', 'Manual journal created successfully')
-            ->assertJsonPath('data.reference_no', 'JU-20260713-0001')
+            ->assertJsonPath('message', 'Opening balance created successfully')
+            ->assertJsonPath('data.reference_no', 'OPENING-2026')
+            ->assertJsonPath('data.amount', 1500000)
             ->assertJsonPath('data.status', 'posted');
 
         $journalId = $response->json('data.id');
 
         $this->assertDatabaseHas('acc_journal_entries', [
             'id' => $journalId,
-            'service_id' => null,
-            'source_type' => 'MANUAL_JOURNAL',
-            'reference_no' => 'JU-20260713-0001',
-            'amount' => 1000000,
+            'source_type' => 'OPENING_BALANCE',
+            'reference_no' => 'OPENING-2026',
+            'amount' => 1500000,
             'status' => JournalStatus::POSTED->value,
         ], 'single');
 
         $this->assertDatabaseHas('acc_journal_entry_details', [
             'journal_entry_id' => $journalId,
-            'account_id' => $debitAccount->id,
+            'account_id' => $assetAccount->id,
             'debit' => 1000000,
             'credit' => 0,
         ], 'single');
 
         $this->assertDatabaseHas('acc_journal_entry_details', [
             'journal_entry_id' => $journalId,
-            'account_id' => $creditAccount->id,
+            'account_id' => $liabilityAccount->id,
+            'debit' => 500000,
+            'credit' => 0,
+        ], 'single');
+
+        $this->assertDatabaseHas('acc_journal_entry_details', [
+            'journal_entry_id' => $journalId,
+            'account_id' => $equityAccount->id,
             'debit' => 0,
-            'credit' => 1000000,
+            'credit' => 1500000,
         ], 'single');
     }
 
-    public function test_it_rejects_unbalanced_manual_journals(): void
+    public function test_it_rejects_unbalanced_opening_balance(): void
     {
         $this->useSingleDatabaseMode('single');
         $this->createAllAccountingTables('single');
 
-        [$debitAccount, $creditAccount] = $this->seedPostingAccounts('single');
+        [$assetAccount, $liabilityAccount] = $this->seedOpeningBalanceAccounts('single');
 
-        $response = $this->postJson('/api/accounting/journals', [
-            'trx_date' => '2026-07-13',
+        $response = $this->postJson('/api/accounting/opening-balances', [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-2026',
             'details' => [
                 [
-                    'account_id' => $debitAccount->id,
-                    'type' => 'D',
+                    'account_id' => $assetAccount->id,
                     'amount' => 1000000,
                 ],
                 [
-                    'account_id' => $creditAccount->id,
-                    'type' => 'K',
-                    'amount' => 900000,
+                    'account_id' => $liabilityAccount->id,
+                    'amount' => 500000,
                 ],
             ],
         ]);
@@ -115,18 +119,17 @@ class ManualJournalControllerTest extends TestCase
         $this->useSingleDatabaseMode('single');
         $this->createAllAccountingTables('single');
 
-        $response = $this->postJson('/api/accounting/journals', [
-            'trx_date' => '2026-07-13',
+        $response = $this->postJson('/api/accounting/opening-balances', [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-2026',
             'details' => [
                 [
                     'account_id' => '11111111-1111-1111-1111-111111111111',
-                    'type' => 'D',
                     'amount' => 1000000,
                 ],
                 [
                     'account_id' => '22222222-2222-2222-2222-222222222222',
-                    'type' => 'K',
-                    'amount' => 1000000,
+                    'amount' => -1000000,
                 ],
             ],
         ]);
@@ -140,39 +143,40 @@ class ManualJournalControllerTest extends TestCase
         $this->useSingleDatabaseMode('single');
         $this->createAllAccountingTables('single');
 
-        $this->seedCategory('single');
-        $debitAccount = $this->createAccount('single', [
+        $assetCategory = $this->seedCategory('single', 'ASSET', 'CASH_CASH_EQUIVALENT', 'Cash & Cash Equivalent', 'BS', 1);
+        $liabilityCategory = $this->seedCategory('single', 'LIABILITY', 'CURRENT_LIABILITY', 'Current Liability', 'BS', 2);
+
+        $inactiveAccount = $this->createAccount('single', $assetCategory->id, [
             'code' => '1001',
             'name' => 'Kas',
             'is_postable' => true,
             'status' => false,
         ]);
-        $creditAccount = $this->createAccount('single', [
-            'code' => '3001',
-            'name' => 'Modal',
+        $liabilityAccount = $this->createAccount('single', $liabilityCategory->id, [
+            'code' => '2001',
+            'name' => 'Hutang',
             'is_postable' => true,
             'status' => true,
         ]);
 
-        $response = $this->postJson('/api/accounting/journals', [
-            'trx_date' => '2026-07-13',
+        $response = $this->postJson('/api/accounting/opening-balances', [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-2026',
             'details' => [
                 [
-                    'account_id' => $debitAccount->id,
-                    'type' => 'D',
+                    'account_id' => $inactiveAccount->id,
                     'amount' => 1000000,
                 ],
                 [
-                    'account_id' => $creditAccount->id,
-                    'type' => 'K',
-                    'amount' => 1000000,
+                    'account_id' => $liabilityAccount->id,
+                    'amount' => -1000000,
                 ],
             ],
         ]);
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['details.0.account_id']);
-        $this->assertSame("Account is inactive: {$debitAccount->id}", $response->json('errors')['details.0.account_id'][0]);
+        $this->assertSame("Account is inactive: {$inactiveAccount->id}", $response->json('errors')['details.0.account_id'][0]);
     }
 
     public function test_it_rejects_non_postable_accounts(): void
@@ -180,39 +184,74 @@ class ManualJournalControllerTest extends TestCase
         $this->useSingleDatabaseMode('single');
         $this->createAllAccountingTables('single');
 
-        $this->seedCategory('single');
-        $debitAccount = $this->createAccount('single', [
+        $assetCategory = $this->seedCategory('single', 'ASSET', 'CASH_CASH_EQUIVALENT', 'Cash & Cash Equivalent', 'BS', 1);
+        $liabilityCategory = $this->seedCategory('single', 'LIABILITY', 'CURRENT_LIABILITY', 'Current Liability', 'BS', 2);
+
+        $nonPostableAccount = $this->createAccount('single', $assetCategory->id, [
             'code' => '1001',
             'name' => 'Kas',
             'is_postable' => false,
             'status' => true,
         ]);
-        $creditAccount = $this->createAccount('single', [
-            'code' => '3001',
-            'name' => 'Modal',
+        $liabilityAccount = $this->createAccount('single', $liabilityCategory->id, [
+            'code' => '2001',
+            'name' => 'Hutang',
             'is_postable' => true,
             'status' => true,
         ]);
 
-        $response = $this->postJson('/api/accounting/journals', [
-            'trx_date' => '2026-07-13',
+        $response = $this->postJson('/api/accounting/opening-balances', [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-2026',
             'details' => [
                 [
-                    'account_id' => $debitAccount->id,
-                    'type' => 'D',
+                    'account_id' => $nonPostableAccount->id,
                     'amount' => 1000000,
                 ],
                 [
-                    'account_id' => $creditAccount->id,
-                    'type' => 'K',
-                    'amount' => 1000000,
+                    'account_id' => $liabilityAccount->id,
+                    'amount' => -1000000,
                 ],
             ],
         ]);
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['details.0.account_id']);
-        $this->assertSame("Account is not postable: {$debitAccount->id}", $response->json('errors')['details.0.account_id'][0]);
+        $this->assertSame("Account is not postable: {$nonPostableAccount->id}", $response->json('errors')['details.0.account_id'][0]);
+    }
+
+    public function test_it_rejects_duplicate_accounts(): void
+    {
+        $this->useSingleDatabaseMode('single');
+        $this->createAllAccountingTables('single');
+
+        $assetCategory = $this->seedCategory('single', 'ASSET', 'CASH_CASH_EQUIVALENT', 'Cash & Cash Equivalent', 'BS', 1);
+
+        $account = $this->createAccount('single', $assetCategory->id, [
+            'code' => '1001',
+            'name' => 'Kas',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $response = $this->postJson('/api/accounting/opening-balances', [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-2026',
+            'details' => [
+                [
+                    'account_id' => $account->id,
+                    'amount' => 1000000,
+                ],
+                [
+                    'account_id' => $account->id,
+                    'amount' => -1000000,
+                ],
+            ],
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['details.1.account_id']);
+        $this->assertSame('Duplicate account is not allowed.', $response->json('errors')['details.1.account_id'][0]);
     }
 
     public function test_it_rejects_closed_fiscal_periods(): void
@@ -220,29 +259,28 @@ class ManualJournalControllerTest extends TestCase
         $this->useSingleDatabaseMode('single');
         $this->createAllAccountingTables('single');
 
-        [$debitAccount, $creditAccount] = $this->seedPostingAccounts('single');
+        [$assetAccount, $liabilityAccount] = $this->seedOpeningBalanceAccounts('single');
         FiscalPeriod::create([
             'year' => 2026,
-            'month' => 7,
-            'start_date' => '2026-07-01',
-            'end_date' => '2026-07-31',
+            'month' => 1,
+            'start_date' => '2026-01-01',
+            'end_date' => '2026-01-31',
             'is_closed' => true,
             'closed_at' => now(),
             'closed_by' => null,
         ]);
 
-        $response = $this->postJson('/api/accounting/journals', [
-            'trx_date' => '2026-07-13',
+        $response = $this->postJson('/api/accounting/opening-balances', [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-2026',
             'details' => [
                 [
-                    'account_id' => $debitAccount->id,
-                    'type' => 'D',
+                    'account_id' => $assetAccount->id,
                     'amount' => 1000000,
                 ],
                 [
-                    'account_id' => $creditAccount->id,
-                    'type' => 'K',
-                    'amount' => 1000000,
+                    'account_id' => $liabilityAccount->id,
+                    'amount' => -1000000,
                 ],
             ],
         ]);
@@ -251,99 +289,134 @@ class ManualJournalControllerTest extends TestCase
             ->assertJsonValidationErrors(['trx_date']);
     }
 
+    public function test_it_rejects_duplicate_opening_balance_requests(): void
+    {
+        $this->useSingleDatabaseMode('single');
+        $this->createAllAccountingTables('single');
+
+        [$assetAccount, $liabilityAccount, $equityAccount] = $this->seedOpeningBalanceAccounts('single');
+
+        $payload = [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-2026',
+            'details' => [
+                [
+                    'account_id' => $assetAccount->id,
+                    'amount' => 1000000,
+                ],
+                [
+                    'account_id' => $liabilityAccount->id,
+                    'amount' => -500000,
+                ],
+                [
+                    'account_id' => $equityAccount->id,
+                    'amount' => 1500000,
+                ],
+            ],
+        ];
+
+        $this->postJson('/api/accounting/opening-balances', $payload)->assertCreated();
+
+        $response = $this->postJson('/api/accounting/opening-balances', $payload);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['source_type']);
+        $this->assertSame('Opening balance has already been created.', $response->json('errors')['source_type'][0]);
+    }
+
     public function test_it_supports_multi_tenant_routes_with_shared_master_data(): void
     {
         $this->useTenantWithSharedMasterMode();
         $this->createMasterTables('master');
         $this->createTransactionTables('tenant');
 
-        $this->seedCategory('master');
-        $debitAccount = $this->createAccount('master', [
-            'code' => '1001',
-            'name' => 'Kas',
-            'is_postable' => true,
-            'status' => true,
-        ]);
-        $creditAccount = $this->createAccount('master', [
-            'code' => '3001',
-            'name' => 'Modal',
-            'is_postable' => true,
-            'status' => true,
-        ]);
+        [$assetAccount, $liabilityAccount, $equityAccount] = $this->seedOpeningBalanceAccounts('master');
 
-        $response = $this->postJson('/api/accounting/tenant-a/journals', [
-            'trx_date' => '2026-07-13',
+        $response = $this->postJson('/api/accounting/tenant-a/opening-balances', [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-TENANT',
             'details' => [
                 [
-                    'account_id' => $debitAccount->id,
-                    'type' => 'D',
+                    'account_id' => $assetAccount->id,
                     'amount' => 1000000,
                 ],
                 [
-                    'account_id' => $creditAccount->id,
-                    'type' => 'K',
-                    'amount' => 1000000,
+                    'account_id' => $liabilityAccount->id,
+                    'amount' => -500000,
+                ],
+                [
+                    'account_id' => $equityAccount->id,
+                    'amount' => 1500000,
                 ],
             ],
         ]);
 
         $response->assertCreated()
-            ->assertJsonPath('data.status', 'posted');
+            ->assertJsonPath('data.status', 'posted')
+            ->assertJsonPath('data.amount', 1500000);
 
         $journalId = $response->json('data.id');
 
         $this->assertDatabaseHas('acc_journal_entries', [
             'id' => $journalId,
-            'source_type' => 'MANUAL_JOURNAL',
-            'amount' => 1000000,
+            'source_type' => 'OPENING_BALANCE',
+            'reference_no' => 'OPENING-TENANT',
+            'amount' => 1500000,
             'status' => JournalStatus::POSTED->value,
         ], 'tenant');
 
         $this->assertDatabaseHas('acc_journal_entry_details', [
             'journal_entry_id' => $journalId,
-            'account_id' => $debitAccount->id,
+            'account_id' => $assetAccount->id,
         ], 'tenant');
     }
 
-    private function seedPostingAccounts(string $connection): array
+    private function seedOpeningBalanceAccounts(string $connection): array
     {
-        $this->seedCategory($connection);
+        $assetCategory = $this->seedCategory($connection, 'ASSET', 'CASH_CASH_EQUIVALENT', 'Cash & Cash Equivalent', 'BS', 1);
+        $liabilityCategory = $this->seedCategory($connection, 'LIABILITY', 'CURRENT_LIABILITY', 'Current Liability', 'BS', 2);
+        $equityCategory = $this->seedCategory($connection, 'EQUITY', 'EQUITY', 'Equity', 'BS', 3);
 
-        $debitAccount = $this->createAccount($connection, [
+        $assetAccount = $this->createAccount($connection, $assetCategory->id, [
             'code' => '1001',
             'name' => 'Kas',
             'is_postable' => true,
             'status' => true,
         ]);
 
-        $creditAccount = $this->createAccount($connection, [
+        $liabilityAccount = $this->createAccount($connection, $liabilityCategory->id, [
+            'code' => '2001',
+            'name' => 'Hutang',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $equityAccount = $this->createAccount($connection, $equityCategory->id, [
             'code' => '3001',
             'name' => 'Modal',
             'is_postable' => true,
             'status' => true,
         ]);
 
-        return [$debitAccount, $creditAccount];
+        return [$assetAccount, $liabilityAccount, $equityAccount];
     }
 
-    private function seedCategory(string $connection): AccountCategory
+    private function seedCategory(string $connection, string $type, string $code, string $name, string $reportType, int $sequenceNo): AccountCategory
     {
         return AccountCategory::on($connection)->create([
-            'type' => 'ASSET',
-            'category_code' => 'CASH_CASH_EQUIVALENT',
-            'category_name' => 'Cash & Cash Equivalent',
-            'report_type' => 'BS',
-            'sequence_no' => 1,
+            'type' => $type,
+            'category_code' => $code,
+            'category_name' => $name,
+            'report_type' => $reportType,
+            'sequence_no' => $sequenceNo,
             'status' => true,
         ]);
     }
 
-    private function createAccount(string $connection, array $attributes): Account
+    private function createAccount(string $connection, string $categoryId, array $attributes): Account
     {
-        $category = AccountCategory::on($connection)->first();
-
         return Account::on($connection)->create(array_merge([
-            'category_id' => $category->id,
+            'category_id' => $categoryId,
         ], $attributes));
     }
 

@@ -3,9 +3,11 @@
 namespace ESolution\LaravelAccounting\Services;
 
 use ESolution\LaravelAccounting\Enums\AccountingServiceCode;
+use ESolution\LaravelAccounting\Enums\NormalBalance;
 use ESolution\LaravelAccounting\Enums\JournalStatus;
 use ESolution\LaravelAccounting\Exceptions\AccountingPeriodLockedException;
 use ESolution\LaravelAccounting\Models\Account;
+use ESolution\LaravelAccounting\Models\AccountCategory;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\JournalEntryDetail;
@@ -134,6 +136,7 @@ class JournalService
                 'source_id' => $data['source_id'] ?? null,
                 'reference_no' => $data['reference_no'] ?? null,
                 'description' => $data['description'] ?? null,
+                'amount' => round($totalDebit, 2),
                 'status' => JournalStatus::DRAFT,
             ]);
 
@@ -154,22 +157,34 @@ class JournalService
     /**
      * Create a manual journal entry.
      */
-    public function journalManual(array $data)
+    public function journalManual(array $data, bool $wrapTransaction = true)
     {
-        return DB::connection($this->transactionConnection())->transaction(function () use ($data) {
-            $detailItems = collect($data['details'] ?? $data['items'] ?? [])->values();
+        $callback = function () use ($data) {
+            return $this->journalManualInternal($data);
+        };
 
-            if ($detailItems->count() < 2) {
+        if (! $wrapTransaction) {
+            return $callback();
+        }
+
+        return DB::connection($this->transactionConnection())->transaction($callback);
+    }
+
+    /**
+     * Create an opening balance journal entry.
+     */
+    public function journalOpeningBalance(array $data)
+    {
+        $this->logConnectionSnapshot('journalOpeningBalance:start');
+
+        return DB::connection($this->transactionConnection())->transaction(function () use ($data) {
+            $trxDate = isset($data['trx_date']) ? Carbon::parse($data['trx_date']) : now();
+
+            if (JournalEntry::query()->where('source_type', 'OPENING_BALANCE')->exists()) {
                 throw ValidationException::withMessages([
-                    'details' => ['At least 2 journal detail lines are required.'],
+                    'source_type' => ['Opening balance has already been created.'],
                 ]);
             }
-
-            $totalDebit = 0;
-            $totalCredit = 0;
-            $journalDetails = [];
-            $errors = [];
-            $trxDate = isset($data['trx_date']) ? Carbon::parse($data['trx_date']) : now();
 
             try {
                 $this->checkPeriodLocked($trxDate);
@@ -179,107 +194,154 @@ class JournalService
                 ]);
             }
 
-            foreach ($detailItems as $index => $item) {
-                // 1. Resolve Account ID
-                $accountId = $item['account_id'] ?? null;
-                $accountCode = $item['account_code'] ?? null;
+            $normalized = $this->normalizeOpeningBalanceDetails($data['details'] ?? []);
 
-                if (! $accountId && ! $accountCode) {
-                    $errors["details.{$index}.account_id"][] = 'Either account_id or account_code is required.';
-                    continue;
-                }
-
-                if (! $accountId) {
-                    $account = $this->accounts->findByCode($accountCode);
-                    if (! $account) {
-                        $errors["details.{$index}.account_id"][] = "Account code not found: {$accountCode}";
-                        continue;
-                    }
-                    $accountId = $account->id;
-                } else {
-                    $account = $this->accounts->findById($accountId);
-
-                    if (! $account) {
-                        $errors["details.{$index}.account_id"][] = "Account ID not found: {$accountId}";
-                        continue;
-                    }
-                }
-
-                if (! $account->status) {
-                    $errors["details.{$index}.account_id"][] = "Account is inactive: {$accountId}";
-                    continue;
-                }
-
-                if (! $account->is_postable) {
-                    $errors["details.{$index}.account_id"][] = "Account is not postable: {$accountId}";
-                    continue;
-                }
-
-                // 2. Calculate Debit/Credit
-                $type = strtolower($item['type'] ?? '');
-                $amount = $item['amount'] ?? 0;
-
-                $isDebit = in_array($type, ['d', 'debit']);
-                $isCredit = in_array($type, ['k', 'credit']);
-
-                if (! $isDebit && ! $isCredit) {
-                    $errors["details.{$index}.type"][] = 'The type must be D or K.';
-                    continue;
-                }
-
-                if (! is_numeric($amount) || $amount <= 0) {
-                    $errors["details.{$index}.amount"][] = 'The amount must be greater than 0.';
-                    continue;
-                }
-
-                $debit = $isDebit ? $amount : 0;
-                $credit = $isCredit ? $amount : 0;
-
-                $totalDebit += $debit;
-                $totalCredit += $credit;
-
-                $journalDetails[] = [
-                    'account_id' => $accountId,
-                    'debit' => $debit,
-                    'credit' => $credit,
-                    'description' => $item['description'] ?? null,
-                ];
+            if ($normalized['errors'] !== []) {
+                throw ValidationException::withMessages($normalized['errors']);
             }
 
-            if ($errors !== []) {
-                throw ValidationException::withMessages($errors);
-            }
-
-            if (round($totalDebit, 2) !== round($totalCredit, 2)) {
+            if (round($normalized['total_debit'], 2) !== round($normalized['total_credit'], 2)) {
                 throw ValidationException::withMessages([
-                    'details' => ["Journal is not balanced. Total Debit: $totalDebit, Total Credit: $totalCredit"],
+                    'details' => ["Opening balance is not balanced. Total Debit: {$normalized['total_debit']}, Total Credit: {$normalized['total_credit']}"],
                 ]);
             }
 
-            $journalNo = $this->generateJournalNo($trxDate);
-            $referenceNo = trim((string) ($data['reference_no'] ?? ''));
-
-            $journal = JournalEntry::create([
-                'journal_no' => $journalNo,
+            return $this->journalManual([
                 'trx_date' => $trxDate,
-                'service_id' => null,
-                'source_type' => 'MANUAL_JOURNAL',
-                'source_id' => null,
-                'reference_no' => $referenceNo !== '' ? $referenceNo : $journalNo,
+                'reference_no' => $data['reference_no'] ?? null,
                 'description' => $data['description'] ?? null,
-                'status' => JournalStatus::POSTED,
-                'posted_at' => now(),
-                'posted_by' => auth()->id() ?? null,
-            ]);
+                'source_type' => 'OPENING_BALANCE',
+                'source_id' => null,
+                'details' => $normalized['details'],
+            ], false);
+        });
+    }
 
-            foreach ($journalDetails as $detail) {
-                JournalEntryDetail::create($detail + ['journal_entry_id' => $journal->id]);
+    protected function journalManualInternal(array $data)
+    {
+        $detailItems = collect($data['details'] ?? $data['items'] ?? [])->values();
+
+        if ($detailItems->count() < 2) {
+            throw ValidationException::withMessages([
+                'details' => ['At least 2 journal detail lines are required.'],
+            ]);
+        }
+
+        $totalDebit = 0;
+        $totalCredit = 0;
+        $journalDetails = [];
+        $errors = [];
+        $trxDate = isset($data['trx_date']) ? Carbon::parse($data['trx_date']) : now();
+
+        try {
+            $this->checkPeriodLocked($trxDate);
+        } catch (AccountingPeriodLockedException $e) {
+            throw ValidationException::withMessages([
+                'trx_date' => [$e->getMessage()],
+            ]);
+        }
+
+        foreach ($detailItems as $index => $item) {
+            // 1. Resolve Account ID
+            $accountId = $item['account_id'] ?? null;
+            $accountCode = $item['account_code'] ?? null;
+
+            if (! $accountId && ! $accountCode) {
+                $errors["details.{$index}.account_id"][] = 'Either account_id or account_code is required.';
+                continue;
             }
 
-            $this->clearCache();
+            if (! $accountId) {
+                $account = $this->accounts->findByCode($accountCode);
+                if (! $account) {
+                    $errors["details.{$index}.account_id"][] = "Account code not found: {$accountCode}";
+                    continue;
+                }
+                $accountId = $account->id;
+            } else {
+                $account = $this->accounts->findById($accountId);
 
-            return $journal;
-        });
+                if (! $account) {
+                    $errors["details.{$index}.account_id"][] = "Account ID not found: {$accountId}";
+                    continue;
+                }
+            }
+
+            if (! $account->status) {
+                $errors["details.{$index}.account_id"][] = "Account is inactive: {$accountId}";
+                continue;
+            }
+
+            if (! $account->is_postable) {
+                $errors["details.{$index}.account_id"][] = "Account is not postable: {$accountId}";
+                continue;
+            }
+
+            // 2. Calculate Debit/Credit
+            $type = strtolower($item['type'] ?? '');
+            $amount = $item['amount'] ?? 0;
+
+            $isDebit = in_array($type, ['d', 'debit']);
+            $isCredit = in_array($type, ['k', 'credit']);
+
+            if (! $isDebit && ! $isCredit) {
+                $errors["details.{$index}.type"][] = 'The type must be D or K.';
+                continue;
+            }
+
+            if (! is_numeric($amount) || $amount <= 0) {
+                $errors["details.{$index}.amount"][] = 'The amount must be greater than 0.';
+                continue;
+            }
+
+            $debit = $isDebit ? $amount : 0;
+            $credit = $isCredit ? $amount : 0;
+
+            $totalDebit += $debit;
+            $totalCredit += $credit;
+
+            $journalDetails[] = [
+                'account_id' => $accountId,
+                'debit' => $debit,
+                'credit' => $credit,
+                'description' => $item['description'] ?? null,
+            ];
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+
+        if (round($totalDebit, 2) !== round($totalCredit, 2)) {
+            throw ValidationException::withMessages([
+                'details' => ["Journal is not balanced. Total Debit: $totalDebit, Total Credit: $totalCredit"],
+            ]);
+        }
+
+        $journalNo = $this->generateJournalNo($trxDate);
+        $referenceNo = trim((string) ($data['reference_no'] ?? ''));
+
+        $journal = JournalEntry::create([
+            'journal_no' => $journalNo,
+            'trx_date' => $trxDate,
+            'service_id' => null,
+            'source_type' => $data['source_type'] ?? 'MANUAL_JOURNAL',
+            'source_id' => $data['source_id'] ?? null,
+            'reference_no' => $referenceNo !== '' ? $referenceNo : $journalNo,
+            'description' => $data['description'] ?? null,
+            'amount' => round($totalDebit, 2),
+            'status' => JournalStatus::POSTED,
+            'posted_at' => now(),
+            'posted_by' => auth()->id() ?? null,
+        ]);
+
+        foreach ($journalDetails as $detail) {
+            JournalEntryDetail::create($detail + ['journal_entry_id' => $journal->id]);
+        }
+
+        $this->clearCache();
+
+        return $journal;
     }
 
     /**
@@ -306,6 +368,7 @@ class JournalService
                 'source_id' => $journal->source_id,
                 'reference_no' => $journal->reference_no,
                 'description' => $this->buildReversalDescription($journal, $reason),
+                'amount' => round((float) ($journal->amount ?? $journal->getRelation('details')->sum('debit')), 2),
                 'status' => JournalStatus::POSTED,
                 'posted_at' => $trxDate,
                 'posted_by' => auth()->id() ?? null,
@@ -464,6 +527,128 @@ class JournalService
     protected function normalizeServiceCode(string|AccountingServiceCode $serviceCode): string
     {
         return $this->serviceCatalog->normalizeCode($serviceCode);
+    }
+
+    protected function normalizeOpeningBalanceDetails(array $details): array
+    {
+        $detailItems = collect($details)->values();
+        $errors = [];
+        $normalizedDetails = [];
+        $totalDebit = 0.0;
+        $totalCredit = 0.0;
+        $seenAccounts = [];
+
+        if ($detailItems->count() < 2) {
+            $errors['details'][] = 'At least 2 opening balance lines are required.';
+
+            return [
+                'details' => [],
+                'errors' => $errors,
+                'total_debit' => 0,
+                'total_credit' => 0,
+            ];
+        }
+
+        $accountIds = $detailItems
+            ->pluck('account_id')
+            ->filter()
+            ->map(fn ($accountId) => (string) $accountId)
+            ->unique()
+            ->values();
+
+        $accounts = Account::query()
+            ->with('category')
+            ->whereIn('id', $accountIds)
+            ->get()
+            ->keyBy('id');
+
+        foreach ($detailItems as $index => $item) {
+            $accountId = isset($item['account_id']) ? (string) $item['account_id'] : null;
+
+            if (! $accountId) {
+                $errors["details.{$index}.account_id"][] = 'account_id is required.';
+                continue;
+            }
+
+            if (isset($seenAccounts[$accountId])) {
+                $errors["details.{$index}.account_id"][] = 'Duplicate account is not allowed.';
+                continue;
+            }
+
+            $seenAccounts[$accountId] = true;
+
+            $account = $accounts->get($accountId);
+
+            if (! $account) {
+                $errors["details.{$index}.account_id"][] = "Account ID not found: {$accountId}";
+                continue;
+            }
+
+            if (! $account->status) {
+                $errors["details.{$index}.account_id"][] = "Account is inactive: {$accountId}";
+                continue;
+            }
+
+            if (! $account->is_postable) {
+                $errors["details.{$index}.account_id"][] = "Account is not postable: {$accountId}";
+                continue;
+            }
+
+            $categoryType = strtoupper((string) ($account->category?->type ?? ''));
+
+            if (! in_array($categoryType, ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'], true)) {
+                $errors["details.{$index}.account_id"][] = "Account category type is invalid: {$accountId}";
+                continue;
+            }
+
+            $signedAmount = $item['amount'] ?? null;
+
+            if (! is_numeric($signedAmount) || (float) $signedAmount == 0.0) {
+                $errors["details.{$index}.amount"][] = 'The amount must be a non-zero numeric value.';
+                continue;
+            }
+
+            $signedAmount = round((float) $signedAmount, 2);
+            $absoluteAmount = round(abs($signedAmount), 2);
+            $normalBalance = $this->resolveNormalBalance($categoryType);
+            $isDebit = $this->signedAmountMapsToDebit($signedAmount, $normalBalance);
+
+            $debit = $isDebit ? $absoluteAmount : 0;
+            $credit = $isDebit ? 0 : $absoluteAmount;
+
+            $totalDebit += $debit;
+            $totalCredit += $credit;
+
+            $normalizedDetails[] = [
+                'account_id' => $accountId,
+                'type' => $isDebit ? 'D' : 'K',
+                'amount' => $absoluteAmount,
+                'description' => $item['description'] ?? null,
+            ];
+        }
+
+        return [
+            'details' => $normalizedDetails,
+            'errors' => $errors,
+            'total_debit' => round($totalDebit, 2),
+            'total_credit' => round($totalCredit, 2),
+        ];
+    }
+
+    protected function resolveNormalBalance(string $categoryType): NormalBalance
+    {
+        return in_array($categoryType, ['ASSET', 'EXPENSE'], true)
+            ? NormalBalance::DEBIT
+            : NormalBalance::CREDIT;
+    }
+
+    protected function signedAmountMapsToDebit(float $signedAmount, NormalBalance $normalBalance): bool
+    {
+        if ($signedAmount > 0) {
+            return $normalBalance === NormalBalance::DEBIT;
+        }
+
+        return $normalBalance === NormalBalance::CREDIT;
     }
 
     protected function logConnectionSnapshot(string $context): void
