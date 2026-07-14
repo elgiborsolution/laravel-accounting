@@ -22,6 +22,7 @@ return new class extends Migration
             $blueprint->uuid('category_id');
             $blueprint->string('code', 30)->unique();
             $blueprint->string('name', 200);
+            $blueprint->text('description')->nullable();
             $blueprint->uuid('parent_id')->nullable();
             $blueprint->integer('level')->default(1);
             $blueprint->boolean('is_postable')->default(true);

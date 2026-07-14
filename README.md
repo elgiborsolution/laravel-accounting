@@ -37,7 +37,7 @@ This documentation uses a normalized accounting design:
 - `acc_account_categories` owns the hierarchy through `parent_id`.
 - Root category `type` values are `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, and `EXPENSE`.
 - `category_name` is fully custom.
-- `acc_accounts` contains posting accounts only.
+- `acc_accounts` contains posting accounts only and supports optional `description` notes.
 - `acc_accounts.parent_id` and `acc_accounts.level` are removed from the design.
 - Every account must have `category_id`.
 - Financial reports aggregate posting balances through the category tree, not through account hierarchy.

@@ -81,6 +81,7 @@ Accounts no longer carry hierarchy metadata.
 | `category_id` | `BIGINT` | Required FK to `acc_account_categories.id` |
 | `code` | `VARCHAR` | Unique posting account code |
 | `name` | `VARCHAR` | Posting account name |
+| `description` | `TEXT NULL` | Optional notes or account description |
 | `is_postable` | `BOOLEAN` | Posting flag |
 | `is_active` | `BOOLEAN` | Active flag |
 | `created_at` | `TIMESTAMP` | Audit column |
@@ -91,6 +92,7 @@ Rules:
 - Remove `parent_id` from `acc_accounts`.
 - Remove `level` from `acc_accounts`.
 - Every account must belong to exactly one category.
+- `description` is optional and can be used for notes or operational context.
 - Accounts never define report structure.
 - Accounts are the leaves used by journals and balances.
 

@@ -20,6 +20,7 @@ class Account extends MasterDataModel
         'category_id',
         'code',
         'name',
+        'description',
         'is_postable',
         'status',
     ];

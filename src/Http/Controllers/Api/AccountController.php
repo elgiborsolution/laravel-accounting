@@ -75,6 +75,7 @@ class AccountController extends BaseController
             'category_id' => ['required', Rule::exists(AccountCategory::validationTable(), 'id')],
             'code' => ['required', 'string', 'max:30', Rule::unique(Account::validationTable(), 'code')],
             'name' => 'required|string|max:200',
+            'description' => 'nullable|string',
             'is_postable' => 'nullable|boolean',
             'status' => 'nullable|boolean',
         ]);
@@ -133,6 +134,7 @@ class AccountController extends BaseController
             'category_id' => ['nullable', Rule::exists(AccountCategory::validationTable(), 'id')],
             'code' => ['nullable', 'string', 'max:30', Rule::unique(Account::validationTable(), 'code')->ignore($id)],
             'name' => 'nullable|string|max:200',
+            'description' => 'nullable|string',
             'is_postable' => 'nullable|boolean',
             'status' => 'nullable|boolean',
         ]);

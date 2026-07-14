@@ -30,12 +30,18 @@ class AccountControllerTest extends TestCase
     public function test_can_list_accounts()
     {
         $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();
-        Account::factory()->create(['category_id' => $category->id, 'code' => '1001', 'name' => 'Cash']);
+        Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '1001',
+            'name' => 'Cash',
+            'description' => 'Kas operasional perusahaan.',
+        ]);
 
         $response = $this->getJson('/api/accounting/accounts');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.0.code', '1001');
+            ->assertJsonPath('data.0.code', '1001')
+            ->assertJsonPath('data.0.description', 'Kas operasional perusahaan.');
         $response->assertJsonMissingPath('data.0.category');
         $response->assertJsonMissingPath('data.0.tree_category');
         $response->assertJsonMissingPath('data.0.balance');
@@ -238,26 +244,35 @@ class AccountControllerTest extends TestCase
             'category_id' => $category->id,
             'code' => '1002',
             'name' => 'Bank BCA',
+            'description' => 'Rekening utama untuk transaksi penjualan.',
             'status' => true,
         ];
 
         $response = $this->postJson('/api/accounting/accounts', $data);
 
         $response->assertStatus(201)
-            ->assertJsonPath('data.code', '1002');
+            ->assertJsonPath('data.code', '1002')
+            ->assertJsonPath('data.description', 'Rekening utama untuk transaksi penjualan.');
 
-        $this->assertDatabaseHas('acc_accounts', ['code' => '1002']);
+        $this->assertDatabaseHas('acc_accounts', [
+            'code' => '1002',
+            'description' => 'Rekening utama untuk transaksi penjualan.',
+        ]);
     }
 
     public function test_can_show_account()
     {
         $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();
-        $account = Account::factory()->create(['category_id' => $category->id]);
+        $account = Account::factory()->create([
+            'category_id' => $category->id,
+            'description' => 'Kas operasional perusahaan.',
+        ]);
 
         $response = $this->getJson("/api/accounting/accounts/{$account->id}");
 
         $response->assertStatus(200)
             ->assertJsonPath('data.id', $account->id)
+            ->assertJsonPath('data.description', 'Kas operasional perusahaan.')
             ->assertJsonPath('data.balance.opening_balance', 0)
             ->assertJsonPath('data.balance.total_debit', 0)
             ->assertJsonPath('data.balance.total_credit', 0)
@@ -299,10 +314,12 @@ class AccountControllerTest extends TestCase
 
         $response = $this->putJson("/api/accounting/accounts/{$account->id}", [
             'name' => 'New Name',
+            'description' => 'Digunakan sebagai account penampung pembayaran customer.',
         ]);
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.name', 'New Name');
+            ->assertJsonPath('data.name', 'New Name')
+            ->assertJsonPath('data.description', 'Digunakan sebagai account penampung pembayaran customer.');
     }
 
     public function test_can_toggle_status()

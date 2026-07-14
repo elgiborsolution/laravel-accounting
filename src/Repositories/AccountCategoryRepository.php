@@ -110,6 +110,7 @@ class AccountCategoryRepository
                         'category_id' => $account->category_id,
                         'code' => $account->code,
                         'name' => $account->name,
+                        'description' => $account->description,
                         'is_postable' => $account->is_postable,
                         'status' => $account->status,
                     ];

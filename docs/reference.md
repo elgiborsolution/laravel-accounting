@@ -8,6 +8,7 @@ This page documents the package surface area together with the normalized chart 
 - Root category `type` values are `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, and `EXPENSE`.
 - `category_name` is custom.
 - `acc_accounts` has no `parent_id` and no `level`.
+- `acc_accounts.description` is optional and stores free-form notes.
 - Every account must have `category_id`.
 - Financial reports aggregate balances from posting accounts into the category tree.
 
@@ -570,6 +571,7 @@ Response body:
 - Success envelope with a collection of accounts
 - Default response does not include `category` or `tree_category`
 - When requested, `category`, `tree_category`, and/or `balance` are serialized on each account
+- Each account item includes `description` when stored in the database
 - `balance` contains:
   - `opening_balance`
   - `total_debit`
@@ -588,6 +590,7 @@ Example response:
       "category_id": "uuid",
       "code": "1001",
       "name": "Cash",
+      "description": "Kas operasional perusahaan.",
       "is_postable": true,
       "status": true
     }
@@ -612,6 +615,7 @@ curl --location 'http://127.0.0.1:8000/api/accounting/accounts?with=balance&year
       "category_id": "uuid",
       "code": "1001",
       "name": "Cash",
+      "description": "Kas operasional perusahaan.",
       "is_postable": true,
       "status": true,
       "balance": {
@@ -634,6 +638,7 @@ Request body:
 - `category_id` required
 - `code` required
 - `name` required
+- `description` optional
 - `is_postable` optional
 - `status` optional
 
@@ -642,6 +647,7 @@ Validation rules:
 - `category_id` required and must exist in the category table
 - `code` required string max 30 and unique
 - `name` required string max 200
+- `description` nullable string
 - `is_postable` nullable boolean
 - `status` nullable boolean
 
@@ -656,6 +662,7 @@ Example response:
     "category_id": "uuid",
     "code": "1001",
     "name": "Cash",
+    "description": "Kas operasional perusahaan.",
     "is_postable": true,
     "status": true
   }
@@ -681,6 +688,7 @@ Example response:
     "category_id": "uuid",
     "code": "1001",
     "name": "Cash",
+    "description": "Kas operasional perusahaan.",
     "is_postable": true,
     "status": true,
     "category": {
@@ -704,6 +712,7 @@ Request body:
 - `category_id` optional
 - `code` optional
 - `name` optional
+- `description` optional
 - `is_postable` optional
 - `status` optional
 
@@ -712,6 +721,7 @@ Validation rules:
 - `category_id` nullable and must exist in the category table
 - `code` nullable string max 30 and unique except current record
 - `name` nullable string max 200
+- `description` nullable string
 - `is_postable` nullable boolean
 - `status` nullable boolean
 
@@ -725,6 +735,7 @@ Example response:
     "id": "uuid",
     "code": "1001",
     "name": "Cash",
+    "description": "Kas operasional perusahaan.",
     "status": true
   }
 }

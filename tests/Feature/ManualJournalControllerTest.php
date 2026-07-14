@@ -418,6 +418,7 @@ class ManualJournalControllerTest extends TestCase
             $table->uuid('category_id');
             $table->string('code', 30)->unique();
             $table->string('name', 200);
+            $table->text('description')->nullable();
             $table->uuid('parent_id')->nullable();
             $table->integer('level')->default(1);
             $table->boolean('is_postable')->default(true);
