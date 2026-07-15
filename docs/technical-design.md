@@ -79,6 +79,7 @@ Accounts no longer carry hierarchy metadata.
 | --- | --- | --- |
 | `id` | `BIGINT` | Primary key |
 | `category_id` | `BIGINT` | Required FK to `acc_account_categories.id` |
+| `tenant_id` | `VARCHAR(100) NULL` | Optional ownership marker. `NULL` means central account. |
 | `code` | `VARCHAR` | Unique posting account code |
 | `name` | `VARCHAR` | Posting account name |
 | `description` | `TEXT NULL` | Optional notes or account description |
@@ -92,6 +93,7 @@ Rules:
 - Remove `parent_id` from `acc_accounts`.
 - Remove `level` from `acc_accounts`.
 - Every account must belong to exactly one category.
+- `tenant_id` is client-controlled and is never inferred automatically from runtime tenancy.
 - `description` is optional and can be used for notes or operational context.
 - Accounts never define report structure.
 - Accounts are the leaves used by journals and balances.

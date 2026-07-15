@@ -74,6 +74,36 @@ abstract class BaseController extends Controller
         return null;
     }
 
+    protected function resolveCurrentTenantIdentifier(?Request $request = null): ?string
+    {
+        if (function_exists('tenancy')) {
+            try {
+                if (tenancy()->initialized && isset(tenancy()->tenant) && tenancy()->tenant) {
+                    return (string) tenancy()->tenant->id;
+                }
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
+        $request ??= request();
+        if (! $request instanceof Request) {
+            return null;
+        }
+
+        $headerTenant = $request->header('X-Tenant');
+        if ($headerTenant !== null && $headerTenant !== '') {
+            return (string) $headerTenant;
+        }
+
+        $routeTenant = $request->route('tenantId');
+        if ($routeTenant !== null && $routeTenant !== '') {
+            return (string) $routeTenant;
+        }
+
+        return null;
+    }
+
     protected function findTenantModel(string $tenantModel, string $tenantIdentifier): ?Model
     {
         $instance = new $tenantModel;
@@ -106,4 +136,5 @@ abstract class BaseController extends Controller
 
         return $tags;
     }
+
 }

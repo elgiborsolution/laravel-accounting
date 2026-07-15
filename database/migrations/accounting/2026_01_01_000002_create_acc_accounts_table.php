@@ -20,6 +20,7 @@ return new class extends Migration
         $this->schema()->create($table, function (Blueprint $blueprint) use ($tablePrefix) {
             $blueprint->uuid('id')->primary();
             $blueprint->uuid('category_id');
+            $blueprint->string('tenant_id', 100)->nullable()->index();
             $blueprint->string('code', 30)->unique();
             $blueprint->string('name', 200);
             $blueprint->text('description')->nullable();

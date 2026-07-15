@@ -466,6 +466,7 @@ class AccountingConnectionModesTest extends TestCase
         Schema::connection($connection)->create($prefix.'accounts', function (Blueprint $table) {
             $table->uuid('id')->primary();
             $table->uuid('category_id');
+            $table->string('tenant_id', 100)->nullable()->index();
             $table->string('code', 30)->unique();
             $table->string('name', 200);
             $table->text('description')->nullable();

@@ -20,7 +20,12 @@ class AccountController extends BaseController
     {
         $this->initializeTenantIfNeeded($tenantId);
 
+        $validated = $request->validate([
+            'category_id' => ['nullable', Rule::exists(AccountCategory::validationTable(), 'id')],
+        ]);
+        $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
         $search = $request->query('search');
+        $categoryFilter = $validated['category_id'] ?? null;
         $with = $this->normalizeWithParameter($request->query('with'));
         $includeCategory = in_array('category', $with, true);
         $includeTreeCategory = in_array('tree_category', $with, true);
@@ -28,6 +33,8 @@ class AccountController extends BaseController
         $balanceYear = (int) $request->query('year', now()->year);
         $balanceMonth = (int) $request->query('month', now()->month);
         $cacheKey = 'index_'
+            .'tenant_'.md5((string) ($tenantFilter ?? '__central__'))
+            .'_category_'.md5((string) ($categoryFilter ?? '__all__'))
             .($search ? 'search_'.md5($search) : 'all')
             .'_with_'.($with ? implode('-', $with) : 'none')
             .($includeBalance ? '_period_'.$balanceYear.'_'.$balanceMonth : '');
@@ -41,16 +48,21 @@ class AccountController extends BaseController
             )));
         }
 
-        $accounts = Cache::tags($cacheTags)->rememberForever($cacheKey, function () use ($search, $includeCategory, $includeTreeCategory, $includeBalance, $balanceYear, $balanceMonth) {
-            $data = Account::when($search, function ($query, $search) {
-                $query->where('code', 'like', "%{$search}%")
-                    ->orWhere('name', 'like', "%{$search}%");
-                })
-                ->orderBy('code')
-                ->get();
+        $accounts = Cache::tags($cacheTags)->rememberForever($cacheKey, function () use ($search, $categoryFilter, $includeCategory, $includeTreeCategory, $includeBalance, $balanceYear, $balanceMonth, $tenantFilter) {
+            $repository = app(AccountRepository::class);
+            $query = $repository->visibleQuery($tenantFilter, $categoryFilter);
+
+            if ($search) {
+                $query->where(function ($query) use ($search) {
+                    $query->where('code', 'like', "%{$search}%")
+                        ->orWhere('name', 'like', "%{$search}%");
+                });
+            }
+
+            $data = $query->orderBy('code')->get();
 
             if ($includeCategory) {
-                $data = app(AccountRepository::class)->attachCategories($data);
+                $data = $repository->attachCategories($data);
             }
 
             if ($includeTreeCategory) {
@@ -73,6 +85,7 @@ class AccountController extends BaseController
 
         $validated = $request->validate([
             'category_id' => ['required', Rule::exists(AccountCategory::validationTable(), 'id')],
+            'tenant_id' => ['nullable', 'string', 'max:100'],
             'code' => ['required', 'string', 'max:30', Rule::unique(Account::validationTable(), 'code')],
             'name' => 'required|string|max:200',
             'description' => 'nullable|string',
@@ -94,9 +107,10 @@ class AccountController extends BaseController
         }
         $this->initializeTenantIfNeeded($tenantId);
 
+        $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
         $balanceYear = (int) $request->query('year', now()->year);
         $balanceMonth = (int) $request->query('month', now()->month);
-        $cacheKey = 'show_'.$id.'_period_'.$balanceYear.'_'.$balanceMonth;
+        $cacheKey = 'show_'.$id.'_tenant_'.md5((string) ($tenantFilter ?? '__central__')).'_period_'.$balanceYear.'_'.$balanceMonth;
 
         $cacheTags = $this->getCacheTags($tenantId);
         $cacheTags = array_values(array_unique(array_merge(
@@ -105,8 +119,13 @@ class AccountController extends BaseController
             $tenantId ? ['acc_account_categories_tenant_'.$tenantId, 'acc_journals_tenant_'.$tenantId] : []
         )));
 
-        $account = Cache::tags($cacheTags)->rememberForever($cacheKey, function () use ($id, $balanceYear, $balanceMonth) {
-            $acc = Account::findOrFail($id);
+        $account = Cache::tags($cacheTags)->rememberForever($cacheKey, function () use ($id, $balanceYear, $balanceMonth, $tenantFilter) {
+            $acc = app(AccountRepository::class)->findByIdVisible($id, $tenantFilter);
+
+            if (! $acc) {
+                abort(404);
+            }
+
             $acc = app(AccountRepository::class)->attachCategories(collect([$acc]))->first();
             $balance = app(AccountBalanceService::class)->getBalances([$acc->id], $balanceYear, $balanceMonth)->get($acc->id);
 
@@ -128,10 +147,15 @@ class AccountController extends BaseController
         }
         $this->initializeTenantIfNeeded($tenantId);
 
-        $account = Account::findOrFail($id);
+        $account = app(AccountRepository::class)->findByIdVisible($id, $this->resolveCurrentTenantIdentifier($request));
+
+        if (! $account) {
+            abort(404);
+        }
 
         $validated = $request->validate([
             'category_id' => ['nullable', Rule::exists(AccountCategory::validationTable(), 'id')],
+            'tenant_id' => ['nullable', 'string', 'max:100'],
             'code' => ['nullable', 'string', 'max:30', Rule::unique(Account::validationTable(), 'code')->ignore($id)],
             'name' => 'nullable|string|max:200',
             'description' => 'nullable|string',
@@ -153,7 +177,11 @@ class AccountController extends BaseController
         }
         $this->initializeTenantIfNeeded($tenantId);
 
-        $account = Account::findOrFail($id);
+        $account = app(AccountRepository::class)->findByIdVisible($id, $this->resolveCurrentTenantIdentifier($request));
+
+        if (! $account) {
+            abort(404);
+        }
 
         $account->delete();
         $this->clearCache($tenantId);
@@ -169,7 +197,11 @@ class AccountController extends BaseController
         }
         $this->initializeTenantIfNeeded($tenantId);
 
-        $account = Account::findOrFail($id);
+        $account = app(AccountRepository::class)->findByIdVisible($id, $this->resolveCurrentTenantIdentifier($request));
+
+        if (! $account) {
+            abort(404);
+        }
         $account->status = ! $account->status;
         $account->save();
         $this->clearCache($tenantId);

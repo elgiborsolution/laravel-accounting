@@ -12,7 +12,12 @@
 					"name": "List Categories",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{
+								"key": "X-Tenant",
+								"value": "tenant-a"
+							}
+						],
 						"url": {
 							"raw": "{{base_url}}/api/accounting/categories",
 							"host": [
@@ -66,7 +71,7 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{base_url}}/api/accounting/accounts?search=1001",
+							"raw": "{{base_url}}/api/accounting/accounts?search=1001&category_id=UUID",
 							"host": [
 								"{{base_url}}"
 							],
@@ -79,6 +84,10 @@
 								{
 									"key": "search",
 									"value": "1001"
+								},
+								{
+									"key": "category_id",
+									"value": "UUID"
 								}
 							]
 						}

@@ -12,6 +12,7 @@ class AccountFactory extends Factory
     public function definition()
     {
         return [
+            'tenant_id' => null,
             'code' => $this->faker->unique()->numerify('####'),
             'name' => $this->faker->word,
             'description' => null,

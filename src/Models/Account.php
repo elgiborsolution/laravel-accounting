@@ -18,6 +18,7 @@ class Account extends MasterDataModel
 
     protected $fillable = [
         'category_id',
+        'tenant_id',
         'code',
         'name',
         'description',

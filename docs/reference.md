@@ -8,6 +8,7 @@ This page documents the package surface area together with the normalized chart 
 - Root category `type` values are `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, and `EXPENSE`.
 - `category_name` is custom.
 - `acc_accounts` has no `parent_id` and no `level`.
+- `acc_accounts.tenant_id` is optional and controls ownership visibility.
 - `acc_accounts.description` is optional and stores free-form notes.
 - Every account must have `category_id`.
 - Financial reports aggregate balances from posting accounts into the category tree.
@@ -333,6 +334,7 @@ Notes:
 
 - `with=children` switches the endpoint into hierarchical/tree mode.
 - This endpoint does not eager-load `accounts` unless `with` explicitly asks for it.
+- When `with=accounts` is used, account visibility follows the resolved tenant context, not a query parameter.
 - Cache keys are parameter-aware, so `root_only`, `parent_id`, and `with` combinations are cached separately.
 
 ### POST `/api/accounting/categories`
@@ -549,6 +551,8 @@ Query parameters:
 
 - `search` optional
 - Matches `code` or `name` using `LIKE`
+- `category_id` optional
+- When provided, only accounts in the specified category are returned
 - `with` optional
 - Supported values:
   - `category`
@@ -572,11 +576,19 @@ Response body:
 - Default response does not include `category` or `tree_category`
 - When requested, `category`, `tree_category`, and/or `balance` are serialized on each account
 - Each account item includes `description` when stored in the database
+- Each account item includes `tenant_id`
 - `balance` contains:
   - `opening_balance`
   - `total_debit`
   - `total_credit`
   - `ending_balance`
+
+Tenant visibility:
+
+- The endpoint resolves the current tenant from `X-Tenant`, existing tenant context, or the tenant-aware route.
+- If no tenant is resolved, only central accounts are returned (`tenant_id IS NULL`).
+- If a tenant is resolved, the endpoint returns central accounts plus accounts whose `tenant_id` matches the resolved tenant.
+- If `category_id` is provided, the category filter is applied together with tenant visibility and search.
 
 Example response:
 
@@ -588,6 +600,7 @@ Example response:
     {
       "id": "uuid",
       "category_id": "uuid",
+      "tenant_id": null,
       "code": "1001",
       "name": "Cash",
       "description": "Kas operasional perusahaan.",
@@ -636,6 +649,7 @@ Description: creates a new account.
 Request body:
 
 - `category_id` required
+- `tenant_id` optional
 - `code` required
 - `name` required
 - `description` optional
@@ -645,6 +659,7 @@ Request body:
 Validation rules:
 
 - `category_id` required and must exist in the category table
+- `tenant_id` nullable string max 100
 - `code` required string max 30 and unique
 - `name` required string max 200
 - `description` nullable string
@@ -660,6 +675,7 @@ Example response:
   "data": {
     "id": "uuid",
     "category_id": "uuid",
+    "tenant_id": "tenant-a",
     "code": "1001",
     "name": "Cash",
     "description": "Kas operasional perusahaan.",
@@ -677,6 +693,11 @@ Path parameters:
 
 - `id` required
 
+Tenant visibility:
+
+- The endpoint resolves the current tenant from `X-Tenant`, existing tenant context, or the tenant-aware route.
+- If the requested account is not visible under the resolved tenant, the endpoint returns `404`.
+
 Example response:
 
 ```json
@@ -686,6 +707,7 @@ Example response:
   "data": {
     "id": "uuid",
     "category_id": "uuid",
+    "tenant_id": "tenant-a",
     "code": "1001",
     "name": "Cash",
     "description": "Kas operasional perusahaan.",
@@ -710,6 +732,7 @@ Path parameters:
 Request body:
 
 - `category_id` optional
+- `tenant_id` optional
 - `code` optional
 - `name` optional
 - `description` optional
@@ -719,6 +742,7 @@ Request body:
 Validation rules:
 
 - `category_id` nullable and must exist in the category table
+- `tenant_id` nullable string max 100
 - `code` nullable string max 30 and unique except current record
 - `name` nullable string max 200
 - `description` nullable string
@@ -733,6 +757,7 @@ Example response:
   "message": "Account updated successfully",
   "data": {
     "id": "uuid",
+    "tenant_id": "tenant-a",
     "code": "1001",
     "name": "Cash",
     "description": "Kas operasional perusahaan.",

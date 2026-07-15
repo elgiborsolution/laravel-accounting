@@ -24,14 +24,16 @@ class AccountCategoryController extends BaseController
         $includeChildren = $this->shouldIncludeChildren($request);
         $rootOnly = filter_var($request->query('root_only', false), FILTER_VALIDATE_BOOLEAN);
         $parentId = $this->normalizeParentId($request->query('parent_id'));
+        $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
 
         $cacheKey = 'index_'
             .($includeChildren ? 'tree' : 'flat')
             .'_parent_'.md5((string) ($parentId ?? '__all__'))
             .'_root_'.($rootOnly ? '1' : '0')
-            .'_with_'.($includeAccounts ? 'accounts' : 'none');
+            .'_with_'.($includeAccounts ? 'accounts' : 'none')
+            .'_tenant_'.md5((string) ($tenantFilter ?? '__central__'));
 
-        $categories = Cache::tags($this->getCacheTags($tenantId))->rememberForever($cacheKey, function () use ($includeAccounts, $includeChildren, $rootOnly, $parentId) {
+        $categories = Cache::tags($this->getCacheTags($tenantId))->rememberForever($cacheKey, function () use ($includeAccounts, $includeChildren, $rootOnly, $parentId, $tenantFilter) {
             $categoryRepository = app(AccountCategoryRepository::class);
             $treeService = app(AccountCategoryTreeService::class);
             $categories = $categoryRepository->allOrdered();
@@ -42,7 +44,7 @@ class AccountCategoryController extends BaseController
                 $categories = $categories->whereNull('parent_id')->values();
             }
 
-            $accounts = $includeAccounts ? app(AccountRepository::class)->allOrdered() : collect();
+            $accounts = $includeAccounts ? app(AccountRepository::class)->visibleOrdered($tenantFilter) : collect();
 
             if ($includeChildren) {
                 $nodes = $categories

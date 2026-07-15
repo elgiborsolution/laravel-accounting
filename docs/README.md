@@ -29,7 +29,7 @@ This documentation is the main technical reference for the package. It now uses 
 - Account hierarchy exists only in `acc_account_categories`.
 - Root category types are `ASSET`, `LIABILITY`, `EQUITY`, `REVENUE`, and `EXPENSE`.
 - `category_name` is fully custom.
-- `acc_accounts` contains posting accounts only, always requires `category_id`, and supports an optional `description` field for notes.
+- `acc_accounts` contains posting accounts only, always requires `category_id`, supports an optional `description` field for notes, and includes client-controlled `tenant_id` ownership.
 - General Ledger, Trial Balance, Profit Loss, Balance Sheet, and Cash Flow are documented as category-tree driven reports.
 
 ## Not Implemented In Source
