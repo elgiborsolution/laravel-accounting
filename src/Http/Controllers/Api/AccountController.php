@@ -6,6 +6,7 @@ use ESolution\LaravelAccounting\Http\Controllers\BaseController;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
 use ESolution\LaravelAccounting\Services\AccountBalanceService;
+use ESolution\LaravelAccounting\Services\AccountOpeningBalanceService;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use Illuminate\Http\Request;
@@ -89,11 +90,13 @@ class AccountController extends BaseController
             'code' => ['required', 'string', 'max:30', Rule::unique(Account::validationTable(), 'code')],
             'name' => 'required|string|max:200',
             'description' => 'nullable|string',
+            'opening_balance' => 'nullable|numeric|min:0',
+            'opening_balance_date' => 'nullable|date|required_with:opening_balance',
             'is_postable' => 'nullable|boolean',
             'status' => 'nullable|boolean',
         ]);
 
-        $account = Account::create($validated);
+        $account = app(AccountOpeningBalanceService::class)->createAccount($validated);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account created successfully', $account, 201);
@@ -159,11 +162,13 @@ class AccountController extends BaseController
             'code' => ['nullable', 'string', 'max:30', Rule::unique(Account::validationTable(), 'code')->ignore($id)],
             'name' => 'nullable|string|max:200',
             'description' => 'nullable|string',
+            'opening_balance' => 'nullable|numeric|min:0',
+            'opening_balance_date' => 'nullable|date|required_with:opening_balance',
             'is_postable' => 'nullable|boolean',
             'status' => 'nullable|boolean',
         ]);
 
-        $account->update($validated);
+        $account = app(AccountOpeningBalanceService::class)->updateAccount($account, $validated);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account updated successfully', $account);

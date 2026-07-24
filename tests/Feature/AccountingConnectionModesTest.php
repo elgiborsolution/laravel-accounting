@@ -439,6 +439,56 @@ class AccountingConnectionModesTest extends TestCase
             ->assertJsonPath('data.0.accounts.0.balance', 900);
     }
 
+    public function test_account_store_with_opening_balance_works_in_single_database_mode(): void
+    {
+        $this->useSingleDatabaseMode('single');
+        $this->createAllAccountingTables('single');
+
+        $cashCategory = AccountCategory::create([
+            'type' => 'ASSET',
+            'category_code' => 'SINGLE_OPENING_BALANCE_ASSET',
+            'category_name' => 'Single Opening Balance Asset',
+            'report_type' => 'BS',
+            'sequence_no' => 1,
+            'status' => true,
+        ]);
+
+        $equityCategory = AccountCategory::create([
+            'type' => 'EQUITY',
+            'category_code' => 'SINGLE_OPENING_BALANCE_EQUITY',
+            'category_name' => 'Single Opening Balance Equity',
+            'report_type' => 'BS',
+            'sequence_no' => 2,
+            'status' => true,
+        ]);
+
+        Account::create([
+            'category_id' => $equityCategory->id,
+            'code' => '3001',
+            'name' => 'Opening Balance Equity',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $response = $this->postJson('/api/accounting/accounts', [
+            'category_id' => $cashCategory->id,
+            'code' => '1011',
+            'name' => 'Single Opening Balance Cash',
+            'is_postable' => true,
+            'status' => true,
+            'opening_balance' => 1234,
+            'opening_balance_date' => '2026-01-01',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('data.code', '1011');
+
+        $accountId = $response->json('data.id');
+
+        $this->assertTrue(DB::connection('single')->table('acc_accounts')->where('id', $accountId)->exists());
+        $this->assertTrue(DB::connection('single')->table('acc_journal_entries')->where('source_type', 'ACCOUNT_OPENING_BALANCE')->where('source_id', $accountId)->exists());
+    }
+
     public function test_master_migration_uses_master_connection_when_shared_database_is_enabled(): void
     {
         $this->useTenantWithSharedMasterMode();

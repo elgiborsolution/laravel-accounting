@@ -50,7 +50,7 @@ return [
     ['category_code' => 'LONG_TERM_LIABILITY', 'code' => '2220', 'name' => 'Hutang Jangka Panjang', 'is_postable' => true],
 
     ['category_code' => 'EQUITY', 'code' => '3000', 'name' => 'Modal Pemilik', 'is_postable' => true],
-    ['category_code' => 'EQUITY', 'code' => '3001', 'name' => 'Ekuitas Saldo Awal', 'is_postable' => true],
+    ['category_code' => 'EQUITY', 'code' => '3001', 'name' => 'Opening Balance Equity', 'is_postable' => true],
     ['category_code' => 'EQUITY', 'code' => '3020', 'name' => 'Prive', 'is_postable' => true],
     ['category_code' => 'EQUITY', 'code' => '3030', 'name' => 'Saldo Laba Tahun Berjalan', 'is_postable' => true],
     ['category_code' => 'EQUITY', 'code' => '3101', 'name' => 'Laba Ditahan', 'is_postable' => true],

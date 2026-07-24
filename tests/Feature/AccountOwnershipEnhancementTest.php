@@ -4,6 +4,7 @@ namespace ESolution\LaravelAccounting\Tests\Feature;
 
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
+use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -325,6 +326,44 @@ class AccountOwnershipEnhancementTest extends TestCase
         $forbiddenResponse = $this->getJson("/api/accounting/accounts/{$account->id}");
 
         $forbiddenResponse->assertNotFound();
+    }
+
+    public function test_account_store_with_opening_balance_supports_tenant_visibility(): void
+    {
+        $category = $this->cashCategory();
+        $equityCategory = AccountCategory::where('category_code', 'EQUITY')->firstOrFail();
+
+        Account::factory()->create([
+            'category_id' => $equityCategory->id,
+            'code' => '3001',
+            'name' => 'Opening Balance Equity',
+            'tenant_id' => null,
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $response = $this->withHeader('X-Tenant', 'tenant-a')->postJson('/api/accounting/accounts', [
+            'category_id' => $category->id,
+            'tenant_id' => 'tenant-a',
+            'code' => '7001',
+            'name' => 'Tenant Opening Balance Account',
+            'status' => true,
+            'is_postable' => true,
+            'opening_balance' => 500000,
+            'opening_balance_date' => '2026-01-01',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('data.tenant_id', 'tenant-a');
+
+        $accountId = $response->json('data.id');
+        $journal = JournalEntry::query()
+            ->where('source_type', 'ACCOUNT_OPENING_BALANCE')
+            ->where('source_id', $accountId)
+            ->first();
+
+        $this->assertNotNull($journal);
+        $this->assertSame('OPENING-7001', $journal->reference_no);
     }
 
     protected function cashCategory(): AccountCategory

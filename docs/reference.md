@@ -687,6 +687,8 @@ Request body:
 - `code` required
 - `name` required
 - `description` optional
+- `opening_balance` optional
+- `opening_balance_date` required when `opening_balance` is provided
 - `is_postable` optional
 - `status` optional
 
@@ -697,8 +699,39 @@ Validation rules:
 - `code` required string max 30 and unique
 - `name` required string max 200
 - `description` nullable string
+- `opening_balance` nullable numeric min 0
+- `opening_balance_date` nullable date and required when `opening_balance` is provided
 - `is_postable` nullable boolean
 - `status` nullable boolean
+
+Opening balance behavior:
+
+- Opening balance is optional during account creation.
+- If `opening_balance > 0`, the package automatically creates one journal through `JournalService::journalManual()`.
+- The journal uses:
+  - `source_type = ACCOUNT_OPENING_BALANCE`
+  - `source_id = {account_id}`
+  - `reference_no = OPENING-{ACCOUNT_CODE}`
+  - `description = Opening Balance - {ACCOUNT_NAME}`
+- Debit or credit placement for the account line follows the category normal balance.
+- The balancing line uses the dedicated `Opening Balance Equity` account.
+- If the contra account is missing, the request is rejected with a validation error.
+
+Example request:
+
+```json
+{
+  "category_id": "uuid",
+  "tenant_id": "tenant-a",
+  "code": "1001",
+  "name": "Cash",
+  "description": "Kas operasional perusahaan.",
+  "is_postable": true,
+  "status": true,
+  "opening_balance": 1000000,
+  "opening_balance_date": "2026-01-01"
+}
+```
 
 Example response:
 
@@ -770,6 +803,8 @@ Request body:
 - `code` optional
 - `name` optional
 - `description` optional
+- `opening_balance` optional
+- `opening_balance_date` required when `opening_balance` is provided
 - `is_postable` optional
 - `status` optional
 
@@ -780,8 +815,27 @@ Validation rules:
 - `code` nullable string max 30 and unique except current record
 - `name` nullable string max 200
 - `description` nullable string
+- `opening_balance` nullable numeric min 0
+- `opening_balance_date` nullable date and required when `opening_balance` is provided
 - `is_postable` nullable boolean
 - `status` nullable boolean
+
+Opening balance behavior:
+
+- Opening balance can only be set once per account.
+- If an `ACCOUNT_OPENING_BALANCE` journal already exists for the account, any later attempt to send `opening_balance` or `opening_balance_date` is rejected.
+- Updating other fields such as `name`, `code`, `description`, `status`, or `is_postable` remains allowed.
+
+Example request:
+
+```json
+{
+  "name": "Cash Updated",
+  "description": "Digunakan sebagai account penampung pembayaran customer.",
+  "opening_balance": 250000,
+  "opening_balance_date": "2026-01-01"
+}
+```
 
 Example response:
 

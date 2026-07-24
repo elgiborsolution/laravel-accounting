@@ -4,6 +4,7 @@ namespace ESolution\LaravelAccounting;
 
 use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
 use ESolution\LaravelAccounting\Services\AccountBalanceService;
+use ESolution\LaravelAccounting\Services\AccountOpeningBalanceService;
 use ESolution\LaravelAccounting\Services\AccountingService;
 use ESolution\LaravelAccounting\Services\ClosingService;
 use ESolution\LaravelAccounting\Services\CoaService;
@@ -105,6 +106,13 @@ class AccountingServiceProvider extends ServiceProvider
                 $app->make(FiscalPeriodRepository::class),
                 $app->make(AccountingConnectionResolver::class),
                 $app->make(AccountingTableResolver::class)
+            );
+        });
+
+        $this->app->singleton(AccountOpeningBalanceService::class, function ($app) {
+            return new AccountOpeningBalanceService(
+                $app->make(JournalService::class),
+                $app->make(AccountingConnectionResolver::class)
             );
         });
 
