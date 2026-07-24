@@ -4,6 +4,7 @@ namespace ESolution\LaravelAccounting\Tests\Feature;
 
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
+use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -216,5 +217,198 @@ class AccountCategoryTreeTest extends TestCase
         $node = $data->first(fn (array $item) => $item['id'] === $category->id);
 
         $this->assertArrayHasKey('accounts', $node);
+    }
+
+    public function test_account_categories_index_can_include_balance_recursively(): void
+    {
+        $asset = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'BALANCE_ROOT_TEST',
+            'category_name' => 'Assets Test',
+            'report_type' => 'BS',
+            'sequence_no' => 100,
+            'status' => true,
+        ]);
+
+        $currentAsset = AccountCategory::create([
+            'parent_id' => $asset->id,
+            'type' => 'ASSET',
+            'category_code' => 'BALANCE_CHILD_TEST',
+            'category_name' => 'Current Assets Test',
+            'report_type' => 'BS',
+            'sequence_no' => 101,
+            'status' => true,
+        ]);
+
+        $fixedAsset = AccountCategory::create([
+            'parent_id' => $asset->id,
+            'type' => 'ASSET',
+            'category_code' => 'BALANCE_FIXED_TEST',
+            'category_name' => 'Fixed Assets Test',
+            'report_type' => 'BS',
+            'sequence_no' => 102,
+            'status' => true,
+        ]);
+
+        $cash = Account::create([
+            'category_id' => $currentAsset->id,
+            'code' => '9101',
+            'name' => 'Cash Test',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $bank = Account::create([
+            'category_id' => $currentAsset->id,
+            'code' => '9102',
+            'name' => 'Bank Test',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $vehicle = Account::create([
+            'category_id' => $fixedAsset->id,
+            'code' => '9103',
+            'name' => 'Vehicle Test',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $this->storeMonthlyBalance($cash->id, 2026, 7, 10000);
+        $this->storeMonthlyBalance($bank->id, 2026, 7, 5000);
+        $this->storeMonthlyBalance($vehicle->id, 2026, 7, 20000);
+
+        $response = $this->getJson('/api/accounting/categories?with=balance&year=2026&month=7');
+
+        $response->assertOk();
+
+        $data = collect($response->json('data'));
+
+        $assetNode = $data->firstWhere('id', $asset->id);
+        $currentAssetNode = $data->firstWhere('id', $currentAsset->id);
+        $fixedAssetNode = $data->firstWhere('id', $fixedAsset->id);
+
+        $this->assertSame(35000.0, (float) data_get($assetNode, 'balance'));
+        $this->assertSame(15000.0, (float) data_get($currentAssetNode, 'balance'));
+        $this->assertSame(20000.0, (float) data_get($fixedAssetNode, 'balance'));
+    }
+
+    public function test_account_categories_index_can_include_accounts_and_balance(): void
+    {
+        $category = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'ACCOUNT_BALANCE_TEST',
+            'category_name' => 'Account Balance Test',
+            'report_type' => 'BS',
+            'sequence_no' => 110,
+            'status' => true,
+        ]);
+
+        $cash = Account::create([
+            'category_id' => $category->id,
+            'code' => '9201',
+            'name' => 'Cash Account Test',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $bank = Account::create([
+            'category_id' => $category->id,
+            'code' => '9202',
+            'name' => 'Bank Account Test',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $this->storeMonthlyBalance($cash->id, 2026, 7, 1500000);
+        $this->storeMonthlyBalance($bank->id, 2026, 7, 2500000);
+
+        $response = $this->getJson('/api/accounting/categories?with=accounts,balance&year=2026&month=7');
+
+        $response->assertOk();
+
+        $node = collect($response->json('data'))->firstWhere('id', $category->id);
+
+        $this->assertSame(4000000.0, (float) data_get($node, 'balance'));
+        $this->assertSame(1500000.0, (float) data_get($node, 'accounts.0.balance'));
+        $this->assertSame(2500000.0, (float) data_get($node, 'accounts.1.balance'));
+    }
+
+    public function test_account_categories_index_returns_zero_balance_for_categories_without_accounts_or_children(): void
+    {
+        $category = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'EMPTY_BALANCE_TEST',
+            'category_name' => 'Empty Balance Test',
+            'report_type' => 'BS',
+            'sequence_no' => 120,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?with=balance&year=2026&month=7');
+
+        $response->assertOk()
+            ->assertJsonPath('data.'.collect($response->json('data'))->search(fn (array $item) => $item['id'] === $category->id).'.balance', 0);
+    }
+
+    public function test_account_categories_index_returns_child_balance_for_parent_without_direct_accounts(): void
+    {
+        $parent = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'PARENT_ONLY_BALANCE_TEST',
+            'category_name' => 'Parent Only Balance Test',
+            'report_type' => 'BS',
+            'sequence_no' => 130,
+            'status' => true,
+        ]);
+
+        $child = AccountCategory::create([
+            'parent_id' => $parent->id,
+            'type' => 'ASSET',
+            'category_code' => 'CHILD_ONLY_BALANCE_TEST',
+            'category_name' => 'Child Only Balance Test',
+            'report_type' => 'BS',
+            'sequence_no' => 131,
+            'status' => true,
+        ]);
+
+        $account = Account::create([
+            'category_id' => $child->id,
+            'code' => '9301',
+            'name' => 'Child Cash Test',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $this->storeMonthlyBalance($account->id, 2026, 7, 750000);
+
+        $response = $this->getJson('/api/accounting/categories?with=balance&year=2026&month=7');
+
+        $response->assertOk();
+
+        $data = collect($response->json('data'));
+
+        $this->assertSame(750000.0, (float) data_get($data->firstWhere('id', $parent->id), 'balance'));
+        $this->assertSame(750000.0, (float) data_get($data->firstWhere('id', $child->id), 'balance'));
+    }
+
+    protected function storeMonthlyBalance(string $accountId, int $year, int $month, float $endingBalance): void
+    {
+        MonthlyBalance::create([
+            'fiscal_year' => $year,
+            'fiscal_month' => $month,
+            'account_id' => $accountId,
+            'opening_balance' => $endingBalance,
+            'total_debit' => 0,
+            'total_credit' => 0,
+            'ending_balance' => $endingBalance,
+            'journal_count' => 0,
+            'closed_at' => null,
+            'closed_by' => null,
+        ]);
     }
 }

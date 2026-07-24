@@ -4,6 +4,7 @@ namespace ESolution\LaravelAccounting\Tests\Feature;
 
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
+use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
@@ -257,6 +258,47 @@ class AccountOwnershipEnhancementTest extends TestCase
         $this->assertSame(['1001', '2001'], collect(data_get($node, 'accounts'))->pluck('code')->all());
     }
 
+    public function test_category_balances_follow_tenant_filter_when_accounts_and_balance_are_requested(): void
+    {
+        $category = $this->cashCategory();
+
+        $centralAccount = Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '1101',
+            'name' => 'Central Cash Balance',
+            'tenant_id' => null,
+        ]);
+
+        $tenantAAccount = Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '2101',
+            'name' => 'Tenant A Cash Balance',
+            'tenant_id' => 'tenant-a',
+        ]);
+
+        $tenantBAccount = Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '3101',
+            'name' => 'Tenant B Cash Balance',
+            'tenant_id' => 'tenant-b',
+        ]);
+
+        $this->storeMonthlyBalance($centralAccount->id, 2026, 7, 1000);
+        $this->storeMonthlyBalance($tenantAAccount->id, 2026, 7, 2500);
+        $this->storeMonthlyBalance($tenantBAccount->id, 2026, 7, 9000);
+
+        $response = $this->withHeader('X-Tenant', 'tenant-a')
+            ->getJson('/api/accounting/categories?with=accounts,balance&year=2026&month=7');
+
+        $response->assertOk();
+
+        $node = collect($response->json('data'))->firstWhere('id', $category->id);
+
+        $this->assertSame(3500.0, (float) data_get($node, 'balance'));
+        $this->assertSame(['1101', '2101'], collect(data_get($node, 'accounts'))->pluck('code')->all());
+        $this->assertSame([1000.0, 2500.0], collect(data_get($node, 'accounts'))->pluck('balance')->map(fn ($value) => (float) $value)->all());
+    }
+
     public function test_account_show_respects_tenant_visibility(): void
     {
         $category = $this->cashCategory();
@@ -288,5 +330,21 @@ class AccountOwnershipEnhancementTest extends TestCase
     protected function cashCategory(): AccountCategory
     {
         return AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
+    }
+
+    protected function storeMonthlyBalance(string $accountId, int $year, int $month, float $endingBalance): void
+    {
+        MonthlyBalance::create([
+            'fiscal_year' => $year,
+            'fiscal_month' => $month,
+            'account_id' => $accountId,
+            'opening_balance' => $endingBalance,
+            'total_debit' => 0,
+            'total_credit' => 0,
+            'ending_balance' => $endingBalance,
+            'journal_count' => 0,
+            'closed_at' => null,
+            'closed_by' => null,
+        ]);
     }
 }

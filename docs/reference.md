@@ -267,19 +267,26 @@ Authentication: no package-level auth. Host app may add auth middleware.
 Query parameters:
 
 - `with` `string|array` optional
-- Supported values: `children`, `accounts`
+- Supported values: `children`, `accounts`, `balance`
 - Accepted formats:
   - `with=children`
   - `with=accounts`
+  - `with=balance`
   - `with=children,accounts`
+  - `with=accounts,balance`
   - `with[]=children`
   - `with[]=accounts`
+  - `with[]=balance`
 - `root_only` `boolean` optional
 - When `true`, only categories with `parent_id = null` are returned.
 - `parent_id` `uuid|string` optional
 - When provided, only child categories with `parent_id = {id}` are returned.
 - The category with `id = {id}` itself is excluded.
 - If `parent_id` is present, it takes precedence over `root_only`.
+- `year` `integer` optional
+- Used only when `with=balance` is requested. Defaults to current year.
+- `month` `integer` optional
+- Used only when `with=balance` is requested. Defaults to current month.
 
 Response body:
 
@@ -293,6 +300,8 @@ Response body:
   - `is_active`
 - When `with=children`, the controller returns a tree node payload with recursive `children`.
 - When `with=accounts`, the controller attaches `accounts`.
+- When `with=balance`, each category includes `balance`.
+- When `with=accounts,balance`, each account inside `accounts` also includes `balance`.
 - When both are requested, both relations are present.
 
 Validation rules: none, this endpoint only reads query parameters.
@@ -306,6 +315,16 @@ Example request:
 
 ```bash
 curl --location 'http://127.0.0.1:8000/api/accounting/categories?root_only=true&with=children,accounts' \
+--header 'Accept: application/json'
+```
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/categories?with=balance&year=2026&month=7' \
+--header 'Accept: application/json'
+```
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/categories?with=accounts,balance&year=2026&month=7' \
 --header 'Accept: application/json'
 ```
 
@@ -324,6 +343,19 @@ Example response:
       "parent_id": null,
       "sequence_no": 1,
       "is_active": true,
+      "balance": 12500000,
+      "accounts": [
+        {
+          "id": "account-uuid",
+          "category_id": "uuid",
+          "code": "110001",
+          "name": "Cash",
+          "description": "Main cash account",
+          "is_postable": true,
+          "status": true,
+          "balance": 1500000
+        }
+      ],
       "children": []
     }
   ]
@@ -335,6 +367,8 @@ Notes:
 - `with=children` switches the endpoint into hierarchical/tree mode.
 - This endpoint does not eager-load `accounts` unless `with` explicitly asks for it.
 - When `with=accounts` is used, account visibility follows the resolved tenant context, not a query parameter.
+- `with=balance` reuses the existing account balance service and loads account balances in bulk before aggregating category totals in memory.
+- Category balance is calculated recursively from direct child accounts and descendant categories.
 - Cache keys are parameter-aware, so `root_only`, `parent_id`, and `with` combinations are cached separately.
 
 ### POST `/api/accounting/categories`

@@ -19,6 +19,10 @@ class AccountCategoryResource extends JsonResource
             'is_active' => (bool) $this->status,
         ];
 
+        if (array_key_exists('balance', $this->resource->getAttributes())) {
+            $data['balance'] = (float) $this->balance;
+        }
+
         if ($this->relationLoaded('children')) {
             $data['children'] = self::collection($this->children);
         }

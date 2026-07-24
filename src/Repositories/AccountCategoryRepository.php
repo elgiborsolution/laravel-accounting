@@ -105,7 +105,7 @@ class AccountCategoryRepository
 
             $directAccounts = $accountsByCategory->get($category->id, collect())
                 ->map(function (Account $account) {
-                    return [
+                    $data = [
                         'id' => $account->id,
                         'category_id' => $account->category_id,
                         'code' => $account->code,
@@ -114,6 +114,12 @@ class AccountCategoryRepository
                         'is_postable' => $account->is_postable,
                         'status' => $account->status,
                     ];
+
+                    if (array_key_exists('balance', $account->getAttributes())) {
+                        $data['balance'] = (float) $account->getAttribute('balance');
+                    }
+
+                    return $data;
                 })
                 ->values();
 

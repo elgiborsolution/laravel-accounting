@@ -171,6 +171,65 @@ class AccountingConnectionModesTest extends TestCase
         $this->assertSame('CASH_CASH_EQUIVALENT', AccountCategory::where('id', $journal->details->first()->account->category_id)->value('category_code'));
     }
 
+    public function test_categories_endpoint_can_include_account_and_category_balances_in_shared_master_mode(): void
+    {
+        $this->useTenantWithSharedMasterMode();
+        $this->createMasterTables('master');
+        $this->createTransactionTables('tenant');
+
+        $parent = AccountCategory::create([
+            'type' => 'ASSET',
+            'category_code' => 'CATEGORY_BALANCE_ROOT',
+            'category_name' => 'Category Balance Root',
+            'report_type' => 'BS',
+            'sequence_no' => 1,
+            'status' => true,
+        ]);
+
+        $child = AccountCategory::create([
+            'parent_id' => $parent->id,
+            'type' => 'ASSET',
+            'category_code' => 'CATEGORY_BALANCE_CHILD',
+            'category_name' => 'Category Balance Child',
+            'report_type' => 'BS',
+            'sequence_no' => 2,
+            'status' => true,
+        ]);
+
+        $account = Account::create([
+            'category_id' => $child->id,
+            'code' => '1000',
+            'name' => 'Cash',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        MonthlyBalance::create([
+            'fiscal_year' => 2026,
+            'fiscal_month' => 7,
+            'account_id' => $account->id,
+            'opening_balance' => 1250,
+            'total_debit' => 0,
+            'total_credit' => 0,
+            'ending_balance' => 1250,
+            'journal_count' => 0,
+            'closed_at' => null,
+            'closed_by' => null,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?with=accounts,balance&year=2026&month=7');
+
+        $response->assertOk();
+
+        $data = collect($response->json('data'));
+        $parentNode = $data->firstWhere('id', $parent->id);
+        $childNode = $data->firstWhere('id', $child->id);
+
+        $this->assertSame(1250.0, (float) data_get($parentNode, 'balance'));
+        $this->assertSame(1250.0, (float) data_get($childNode, 'balance'));
+        $this->assertSame(1250.0, (float) data_get($childNode, 'accounts.0.balance'));
+    }
+
     public function test_journal_show_endpoint_uses_transaction_connection_in_shared_master_mode(): void
     {
         $this->useTenantWithSharedMasterMode();
@@ -334,6 +393,50 @@ class AccountingConnectionModesTest extends TestCase
         $this->assertSame('tenant.acc_journal_entries', JournalEntry::validationTable());
         $this->assertTrue(DB::connection('tenant')->table('acc_accounts')->where('code', '1000')->exists());
         $this->assertTrue(DB::connection('tenant')->table('acc_journal_entries')->where('journal_no', 'JV/2026/07/0001')->exists());
+    }
+
+    public function test_categories_endpoint_can_include_balances_in_single_database_mode(): void
+    {
+        $this->useSingleDatabaseMode('single');
+        $this->createAllAccountingTables('single');
+
+        $category = AccountCategory::create([
+            'type' => 'ASSET',
+            'category_code' => 'SINGLE_BALANCE_CATEGORY',
+            'category_name' => 'Single Balance Category',
+            'report_type' => 'BS',
+            'sequence_no' => 1,
+            'status' => true,
+        ]);
+
+        $account = Account::create([
+            'category_id' => $category->id,
+            'code' => '1010',
+            'name' => 'Single Cash',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        MonthlyBalance::create([
+            'fiscal_year' => 2026,
+            'fiscal_month' => 7,
+            'account_id' => $account->id,
+            'opening_balance' => 900,
+            'total_debit' => 0,
+            'total_credit' => 0,
+            'ending_balance' => 900,
+            'journal_count' => 0,
+            'closed_at' => null,
+            'closed_by' => null,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?with=accounts,balance&year=2026&month=7');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.id', $category->id)
+            ->assertJsonPath('data.0.balance', 900)
+            ->assertJsonPath('data.0.accounts.0.id', $account->id)
+            ->assertJsonPath('data.0.accounts.0.balance', 900);
     }
 
     public function test_master_migration_uses_master_connection_when_shared_database_is_enabled(): void

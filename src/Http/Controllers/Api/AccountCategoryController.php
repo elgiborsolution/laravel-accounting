@@ -3,12 +3,13 @@
 namespace ESolution\LaravelAccounting\Http\Controllers\Api;
 
 use ESolution\LaravelAccounting\Http\Controllers\BaseController;
+use ESolution\LaravelAccounting\Http\Resources\AccountCategoryResource;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\AccountCategory;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
+use ESolution\LaravelAccounting\Services\AccountBalanceService;
 use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
-use ESolution\LaravelAccounting\Http\Resources\AccountCategoryResource;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
@@ -20,23 +21,48 @@ class AccountCategoryController extends BaseController
     public function index(Request $request, $tenantId = null)
     {
         $this->initializeTenantIfNeeded($tenantId);
-        $includeAccounts = $this->shouldIncludeAccounts($request);
-        $includeChildren = $this->shouldIncludeChildren($request);
+
+        $with = $this->normalizeWithParameter($request->query('with'));
+        $includeAccounts = in_array('accounts', $with, true);
+        $includeChildren = in_array('children', $with, true);
+        $includeBalance = in_array('balance', $with, true);
         $rootOnly = filter_var($request->query('root_only', false), FILTER_VALIDATE_BOOLEAN);
         $parentId = $this->normalizeParentId($request->query('parent_id'));
         $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
+        $balanceYear = (int) $request->query('year', now()->year);
+        $balanceMonth = (int) $request->query('month', now()->month);
 
         $cacheKey = 'index_'
             .($includeChildren ? 'tree' : 'flat')
             .'_parent_'.md5((string) ($parentId ?? '__all__'))
             .'_root_'.($rootOnly ? '1' : '0')
-            .'_with_'.($includeAccounts ? 'accounts' : 'none')
-            .'_tenant_'.md5((string) ($tenantFilter ?? '__central__'));
+            .'_with_'.($with ? implode('-', $with) : 'none')
+            .'_tenant_'.md5((string) ($tenantFilter ?? '__central__'))
+            .($includeBalance ? '_period_'.$balanceYear.'_'.$balanceMonth : '');
 
-        $categories = Cache::tags($this->getCacheTags($tenantId))->rememberForever($cacheKey, function () use ($includeAccounts, $includeChildren, $rootOnly, $parentId, $tenantFilter) {
+        $cacheTags = $this->getCacheTags($tenantId);
+        if ($includeBalance) {
+            $cacheTags = array_values(array_unique(array_merge(
+                $cacheTags,
+                ['acc_accounts', 'acc_journals'],
+                $tenantId ? ['acc_accounts_tenant_'.$tenantId, 'acc_journals_tenant_'.$tenantId] : []
+            )));
+        }
+
+        $categories = Cache::tags($cacheTags)->rememberForever($cacheKey, function () use (
+            $includeAccounts,
+            $includeChildren,
+            $includeBalance,
+            $rootOnly,
+            $parentId,
+            $tenantFilter,
+            $balanceYear,
+            $balanceMonth
+        ) {
             $categoryRepository = app(AccountCategoryRepository::class);
             $treeService = app(AccountCategoryTreeService::class);
-            $categories = $categoryRepository->allOrdered();
+            $allCategories = $categoryRepository->allOrdered();
+            $categories = $allCategories;
 
             if ($parentId !== null) {
                 $categories = $categories->where('parent_id', $parentId)->values();
@@ -44,18 +70,40 @@ class AccountCategoryController extends BaseController
                 $categories = $categories->whereNull('parent_id')->values();
             }
 
-            $accounts = $includeAccounts ? app(AccountRepository::class)->visibleOrdered($tenantFilter) : collect();
+            $accounts = ($includeAccounts || $includeBalance)
+                ? app(AccountRepository::class)->visibleOrdered($tenantFilter)
+                : collect();
+
+            $accountBalanceMap = $includeBalance
+                ? app(AccountBalanceService::class)->getBalances($accounts->pluck('id')->all(), $balanceYear, $balanceMonth)
+                : collect();
+
+            if ($includeBalance) {
+                $accounts = $this->attachAccountBalances($accounts, $accountBalanceMap);
+            }
+
+            $categoryBalanceMap = $includeBalance
+                ? $this->buildCategoryBalanceMap($allCategories, $accounts, $accountBalanceMap)
+                : collect();
 
             if ($includeChildren) {
                 $nodes = $categories
-                    ->map(fn (AccountCategory $category) => $treeService->buildNode($category, $categories->merge(app(AccountCategoryRepository::class)->allOrdered())->unique('id')->values(), $accounts))
+                    ->map(fn (AccountCategory $category) => $treeService->buildNode($category, $allCategories, $accounts))
                     ->values();
 
-                return $this->stripMissingRelationsFromTree($nodes, $includeAccounts);
+                if ($includeBalance) {
+                    $nodes = $this->attachBalancesToTree($nodes, $categoryBalanceMap);
+                }
+
+                return $this->stripMissingRelationsFromTree($nodes, $includeAccounts, $includeBalance);
             }
 
             if ($includeAccounts) {
                 $categories = $categoryRepository->attachAccounts($categories, $accounts);
+            }
+
+            if ($includeBalance) {
+                $categories = $this->attachCategoryBalances($categories, $categoryBalanceMap);
             }
 
             return AccountCategoryResource::collection($categories);
@@ -185,33 +233,36 @@ class AccountCategoryController extends BaseController
         Cache::tags(array_merge(['acc_accounts'], $tenantId ? ['acc_accounts_tenant_'.$tenantId] : []))->flush();
     }
 
-    protected function shouldIncludeAccounts(Request $request): bool
+    protected function normalizeWithParameter(mixed $with): array
     {
-        $with = $request->query('with', []);
+        if (is_array($with)) {
+            $values = [];
 
-        if (is_string($with)) {
-            return in_array('accounts', array_map('trim', explode(',', $with)), true);
-        }
-
-        if (! is_array($with)) {
-            return false;
-        }
-
-        $flattened = [];
-        foreach ($with as $value) {
-            if (is_array($value)) {
-                foreach ($value as $nested) {
-                    $flattened[] = (string) $nested;
+            foreach ($with as $value) {
+                if (is_array($value)) {
+                    foreach ($value as $nested) {
+                        $values[] = trim((string) $nested);
+                    }
+                    continue;
                 }
-                continue;
+
+                foreach (explode(',', (string) $value) as $part) {
+                    $values[] = trim($part);
+                }
             }
 
-            foreach (explode(',', (string) $value) as $part) {
-                $flattened[] = trim($part);
-            }
+            $with = $values;
+        } elseif (is_string($with)) {
+            $with = array_map('trim', explode(',', $with));
+        } else {
+            return [];
         }
 
-        return in_array('accounts', $flattened, true);
+        $with = array_values(array_filter($with, fn ($item) => $item !== ''));
+        $with = array_values(array_intersect($with, ['accounts', 'children', 'balance']));
+        sort($with);
+
+        return $with;
     }
 
     protected function normalizeParentId($parentId): ?string
@@ -229,50 +280,103 @@ class AccountCategoryController extends BaseController
         return $parentId;
     }
 
-    protected function shouldIncludeChildren(Request $request): bool
+    protected function stripMissingRelationsFromTree($tree, bool $includeAccounts = false, bool $includeBalance = false)
     {
-        $with = $request->query('with', []);
-
-        if (is_string($with)) {
-            return in_array('children', array_map('trim', explode(',', $with)), true);
-        }
-
-        if (! is_array($with)) {
-            return false;
-        }
-
-        $flattened = [];
-        foreach ($with as $value) {
-            if (is_array($value)) {
-                foreach ($value as $nested) {
-                    $flattened[] = (string) $nested;
-                }
-                continue;
-            }
-
-            foreach (explode(',', (string) $value) as $part) {
-                $flattened[] = trim($part);
-            }
-        }
-
-        return in_array('children', $flattened, true);
-    }
-
-    protected function stripMissingRelationsFromTree($tree, bool $includeAccounts = false)
-    {
-        return collect($tree)->map(function ($node) use ($includeAccounts) {
+        return collect($tree)->map(function ($node) use ($includeAccounts, $includeBalance) {
             if (is_array($node)) {
                 if (! array_key_exists('children', $node)) {
                     $node['children'] = [];
                 } else {
-                    $node['children'] = $this->stripMissingRelationsFromTree($node['children'])->all();
+                    $node['children'] = $this->stripMissingRelationsFromTree($node['children'], $includeAccounts, $includeBalance)->all();
                 }
 
                 if (! $includeAccounts) {
                     unset($node['accounts']);
                 }
 
+                if (! $includeBalance) {
+                    unset($node['balance']);
+                }
+
                 return $node;
+            }
+
+            return $node;
+        });
+    }
+
+    protected function attachAccountBalances($accounts, $accountBalanceMap)
+    {
+        return $accounts->map(function (Account $account) use ($accountBalanceMap) {
+            $account->setAttribute('balance', (float) data_get($accountBalanceMap->get($account->id), 'ending_balance', 0));
+
+            return $account;
+        });
+    }
+
+    protected function buildCategoryBalanceMap($categories, $accounts, $accountBalanceMap)
+    {
+        $computed = [];
+        $categoriesByParent = $categories->groupBy(fn (AccountCategory $category) => $category->parent_id ?? '__root__');
+        $accountsByCategory = $accounts->groupBy('category_id');
+
+        $resolve = function (string $categoryId) use (&$resolve, &$computed, $categoriesByParent, $accountsByCategory, $accountBalanceMap): float {
+            if (array_key_exists($categoryId, $computed)) {
+                return $computed[$categoryId];
+            }
+
+            $directAccountBalance = $accountsByCategory->get($categoryId, collect())
+                ->sum(fn (Account $account) => (float) data_get($accountBalanceMap->get($account->id), 'ending_balance', 0));
+
+            $childCategoryBalance = $categoriesByParent->get($categoryId, collect())
+                ->sum(fn (AccountCategory $child) => $resolve($child->id));
+
+            $computed[$categoryId] = round($directAccountBalance + $childCategoryBalance, 2);
+
+            return $computed[$categoryId];
+        };
+
+        foreach ($categories as $category) {
+            $resolve($category->id);
+        }
+
+        return collect($computed);
+    }
+
+    protected function attachCategoryBalances($categories, $categoryBalanceMap)
+    {
+        return $categories->map(function (AccountCategory $category) use ($categoryBalanceMap) {
+            $category->setAttribute('balance', (float) $categoryBalanceMap->get($category->id, 0));
+
+            return $category;
+        });
+    }
+
+    protected function attachBalancesToTree($tree, $categoryBalanceMap)
+    {
+        return collect($tree)->map(function ($node) use ($categoryBalanceMap) {
+            if (! is_array($node)) {
+                return $node;
+            }
+
+            $node['balance'] = (float) $categoryBalanceMap->get($node['id'], 0);
+
+            if (array_key_exists('accounts', $node)) {
+                $node['accounts'] = collect($node['accounts'])->map(function ($account) {
+                    if ($account instanceof Account) {
+                        return $account;
+                    }
+
+                    if (is_array($account)) {
+                        $account['balance'] = (float) ($account['balance'] ?? 0);
+                    }
+
+                    return $account;
+                })->values()->all();
+            }
+
+            if (array_key_exists('children', $node)) {
+                $node['children'] = $this->attachBalancesToTree($node['children'], $categoryBalanceMap)->all();
             }
 
             return $node;

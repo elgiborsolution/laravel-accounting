@@ -552,6 +552,15 @@ The current route set is:
 - `DELETE /api/accounting/accounts/{id}`
 - `PATCH /api/accounting/accounts/{id}/toggle-status`
 - `GET /api/accounting/services`
+
+`GET /api/accounting/categories` supports:
+
+- `with=children`
+- `with=accounts`
+- `with=balance`
+- comma-separated combinations such as `with=accounts,balance`
+
+When `with=balance` is requested, category balances are aggregated recursively from visible account balances using the existing account balance engine. When `with=accounts,balance` is requested, each returned account also includes its `balance`.
 - `POST /api/accounting/services`
 - `GET /api/accounting/services/{id}`
 - `PUT /api/accounting/services/{id}`
