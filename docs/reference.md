@@ -841,6 +841,16 @@ Tenant visibility:
 - The endpoint resolves the current tenant from `X-Tenant`, existing tenant context, or the tenant-aware route.
 - If the requested account is not visible under the resolved tenant, the endpoint returns `404`.
 
+Opening balance response:
+
+- `opening_balance` is `null` when no account opening balance journal exists.
+- When an opening balance journal exists, `opening_balance` includes:
+  - `amount`
+  - `date`
+  - `journal_entry_id`
+  - `can_edit`
+- `can_edit` is `true` only when the opening balance journal exists and no other journal entry exists on or after the opening balance date.
+
 Example response:
 
 ```json
@@ -856,6 +866,12 @@ Example response:
     "description": "Kas operasional perusahaan.",
     "is_postable": true,
     "status": true,
+    "opening_balance": {
+      "amount": 1000000,
+      "date": "2026-01-01",
+      "journal_entry_id": "journal-uuid",
+      "can_edit": true
+    },
     "category": {
       "id": "uuid",
       "category_name": "Current Asset"
@@ -898,8 +914,14 @@ Validation rules:
 
 Opening balance behavior:
 
-- Opening balance can only be set once per account.
-- If an `ACCOUNT_OPENING_BALANCE` journal already exists for the account, any later attempt to send `opening_balance` or `opening_balance_date` is rejected.
+- Opening balance can still be created the first time by sending `opening_balance` and `opening_balance_date`.
+- If an `ACCOUNT_OPENING_BALANCE` journal already exists for the account, the same update endpoint edits that existing journal instead of creating a new one.
+- The opening balance journal keeps the same `id`, `source_type`, `source_id`, and `reference_no`.
+- Amount-only updates are allowed; the existing opening balance date is reused.
+- Date-only updates are allowed; the existing opening balance amount is reused.
+- Editing is rejected when other journal transactions already exist on or after the opening balance date.
+- Editing is also rejected when the fiscal period is closed or the Opening Balance Equity account is missing.
+- The account-side detail line and the contra detail line are both updated so the journal stays balanced.
 - Updating other fields such as `name`, `code`, `description`, `status`, or `is_postable` remains allowed.
 
 Example request:
@@ -926,6 +948,19 @@ Example response:
     "name": "Cash",
     "description": "Kas operasional perusahaan.",
     "status": true
+  }
+}
+```
+
+Validation / error example:
+
+```json
+{
+  "message": "The given data was invalid.",
+  "errors": {
+    "opening_balance": [
+      "Opening Balance cannot be edited because journal transactions already exist."
+    ]
   }
 }
 ```

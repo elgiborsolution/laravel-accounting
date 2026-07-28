@@ -122,7 +122,7 @@ class AccountController extends BaseController
         $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
         $balanceYear = (int) $request->query('year', now()->year);
         $balanceMonth = (int) $request->query('month', now()->month);
-        $cacheKey = 'show_'.$id.'_tenant_'.md5((string) ($tenantFilter ?? '__central__')).'_period_'.$balanceYear.'_'.$balanceMonth;
+        $cacheKey = 'show_v2_'.$id.'_tenant_'.md5((string) ($tenantFilter ?? '__central__')).'_period_'.$balanceYear.'_'.$balanceMonth;
 
         $cacheTags = $this->getCacheTags($tenantId);
         $cacheTags = array_values(array_unique(array_merge(
@@ -144,6 +144,8 @@ class AccountController extends BaseController
             if ($balance) {
                 $acc->setRelation('balance', collect($balance));
             }
+
+            $acc->setAttribute('opening_balance', app(AccountOpeningBalanceService::class)->resolveOpeningBalanceData($acc));
 
             return $acc;
         });
@@ -172,7 +174,7 @@ class AccountController extends BaseController
             'name' => 'nullable|string|max:200',
             'description' => 'nullable|string',
             'opening_balance' => 'nullable|numeric|min:0',
-            'opening_balance_date' => 'nullable|date|required_with:opening_balance',
+            'opening_balance_date' => 'nullable|date',
             'is_postable' => 'nullable|boolean',
             'status' => 'nullable|boolean',
         ]);

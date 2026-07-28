@@ -394,7 +394,8 @@ class AccountControllerTest extends TestCase
             ->assertJsonPath('data.balance.opening_balance', 0)
             ->assertJsonPath('data.balance.total_debit', 0)
             ->assertJsonPath('data.balance.total_credit', 0)
-            ->assertJsonPath('data.balance.ending_balance', 0);
+            ->assertJsonPath('data.balance.ending_balance', 0)
+            ->assertJsonPath('data.opening_balance', null);
     }
 
     public function test_can_show_account_with_balance(): void
@@ -423,6 +424,40 @@ class AccountControllerTest extends TestCase
             ->assertJsonPath('data.balance.total_debit', 50)
             ->assertJsonPath('data.balance.total_credit', 10)
             ->assertJsonPath('data.balance.ending_balance', 140);
+    }
+
+    public function test_can_show_account_with_opening_balance_metadata(): void
+    {
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
+        $this->createOpeningBalanceEquityAccount();
+
+        $account = Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '1012',
+            'name' => 'Cash With Opening Metadata',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $journal = JournalEntry::create([
+            'journal_no' => 'JV/2026/01/0012',
+            'trx_date' => '2026-01-01',
+            'source_type' => 'ACCOUNT_OPENING_BALANCE',
+            'source_id' => $account->id,
+            'reference_no' => 'OPENING-1012',
+            'description' => 'Opening Balance - Cash With Opening Metadata',
+            'amount' => 1000000,
+            'status' => JournalStatus::POSTED,
+            'posted_at' => now(),
+        ]);
+
+        $response = $this->getJson("/api/accounting/accounts/{$account->id}");
+
+        $response->assertOk()
+            ->assertJsonPath('data.opening_balance.amount', 1000000)
+            ->assertJsonPath('data.opening_balance.date', '2026-01-01')
+            ->assertJsonPath('data.opening_balance.journal_entry_id', $journal->id)
+            ->assertJsonPath('data.opening_balance.can_edit', true);
     }
 
     public function test_can_update_account()
@@ -473,7 +508,7 @@ class AccountControllerTest extends TestCase
         $this->assertSame(250000.0, (float) $journal->amount);
     }
 
-    public function test_prevents_setting_opening_balance_more_than_once(): void
+    public function test_can_edit_existing_opening_balance_when_no_other_journals_exist(): void
     {
         $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
         $equity = $this->createOpeningBalanceEquityAccount();
@@ -519,13 +554,159 @@ class AccountControllerTest extends TestCase
             'opening_balance_date' => '2026-01-02',
         ]);
 
+        $response->assertOk();
+
+        $journal->refresh();
+
+        $this->assertSame('2026-01-02', optional($journal->trx_date)->toDateString());
+        $this->assertSame(2000000.0, (float) $journal->amount);
+        $this->assertSame('OPENING-1015', $journal->reference_no);
+
+        $details = JournalEntryDetail::query()
+            ->where('journal_entry_id', $journal->id)
+            ->orderBy('debit', 'desc')
+            ->get();
+
+        $this->assertCount(2, $details);
+        $this->assertSame(2000000.0, (float) $details[0]->debit);
+        $this->assertSame(2000000.0, (float) $details[1]->credit);
+    }
+
+    public function test_rejects_editing_opening_balance_when_other_journals_exist(): void
+    {
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
+        $equity = $this->createOpeningBalanceEquityAccount();
+
+        $account = Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '1019',
+            'name' => 'Cash Blocked Opening',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $journal = JournalEntry::create([
+            'journal_no' => 'JV/2026/01/0019',
+            'trx_date' => '2026-01-01',
+            'source_type' => 'ACCOUNT_OPENING_BALANCE',
+            'source_id' => $account->id,
+            'reference_no' => 'OPENING-1019',
+            'description' => 'Opening Balance - Cash Blocked Opening',
+            'amount' => 1000000,
+            'status' => JournalStatus::POSTED,
+            'posted_at' => now(),
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $account->id,
+            'debit' => 1000000,
+            'credit' => 0,
+            'description' => 'Opening Balance - Cash Blocked Opening',
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $equity->id,
+            'debit' => 0,
+            'credit' => 1000000,
+            'description' => 'Opening Balance - Cash Blocked Opening',
+        ]);
+
+        $otherJournal = JournalEntry::create([
+            'journal_no' => 'JV/2026/01/0999',
+            'trx_date' => '2026-01-02',
+            'source_type' => null,
+            'source_id' => null,
+            'reference_no' => 'OTHER-1019',
+            'description' => 'Blocking Journal',
+            'amount' => 500,
+            'status' => JournalStatus::POSTED,
+            'posted_at' => now(),
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $otherJournal->id,
+            'account_id' => $account->id,
+            'debit' => 500,
+            'credit' => 0,
+            'description' => 'Blocking Journal',
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $otherJournal->id,
+            'account_id' => $equity->id,
+            'debit' => 0,
+            'credit' => 500,
+            'description' => 'Blocking Journal',
+        ]);
+
+        $response = $this->putJson("/api/accounting/accounts/{$account->id}", [
+            'opening_balance' => 2000000,
+            'opening_balance_date' => '2026-01-05',
+        ]);
+
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['opening_balance']);
 
         $this->assertSame(
-            'Opening balance has already been set for this account.',
+            'Opening Balance cannot be edited because journal transactions already exist.',
             $response->json('errors.opening_balance.0')
         );
+    }
+
+    public function test_can_update_existing_opening_balance_amount_only(): void
+    {
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
+        $equity = $this->createOpeningBalanceEquityAccount();
+
+        $account = Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '1020',
+            'name' => 'Cash Amount Only',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $journal = $this->createOpeningBalanceJournal($account, $equity, 1000000, '2026-01-01');
+
+        $response = $this->putJson("/api/accounting/accounts/{$account->id}", [
+            'opening_balance' => 1500000,
+        ]);
+
+        $response->assertOk();
+
+        $journal->refresh();
+
+        $this->assertSame('2026-01-01', optional($journal->trx_date)->toDateString());
+        $this->assertSame(1500000.0, (float) $journal->amount);
+    }
+
+    public function test_can_update_existing_opening_balance_date_only(): void
+    {
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
+        $equity = $this->createOpeningBalanceEquityAccount();
+
+        $account = Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '1021',
+            'name' => 'Cash Date Only',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $journal = $this->createOpeningBalanceJournal($account, $equity, 1000000, '2026-01-01');
+
+        $response = $this->putJson("/api/accounting/accounts/{$account->id}", [
+            'opening_balance_date' => '2026-01-05',
+        ]);
+
+        $response->assertOk();
+
+        $journal->refresh();
+
+        $this->assertSame('2026-01-05', optional($journal->trx_date)->toDateString());
+        $this->assertSame(1000000.0, (float) $journal->amount);
     }
 
     public function test_allows_updating_other_fields_after_opening_balance_exists(): void
@@ -666,5 +847,38 @@ class AccountControllerTest extends TestCase
             'is_postable' => true,
             'status' => true,
         ]);
+    }
+
+    protected function createOpeningBalanceJournal(Account $account, Account $equity, float $amount, string $date): JournalEntry
+    {
+        $journal = JournalEntry::create([
+            'journal_no' => 'JV/'.str_replace('-', '/', $date).'/OB-'.substr($account->code, -4),
+            'trx_date' => $date,
+            'source_type' => 'ACCOUNT_OPENING_BALANCE',
+            'source_id' => $account->id,
+            'reference_no' => 'OPENING-'.$account->code,
+            'description' => 'Opening Balance - '.$account->name,
+            'amount' => $amount,
+            'status' => JournalStatus::POSTED,
+            'posted_at' => now(),
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $account->id,
+            'debit' => $amount,
+            'credit' => 0,
+            'description' => 'Opening Balance - '.$account->name,
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $equity->id,
+            'debit' => 0,
+            'credit' => $amount,
+            'description' => 'Opening Balance - '.$account->name,
+        ]);
+
+        return $journal;
     }
 }

@@ -489,6 +489,92 @@ class AccountingConnectionModesTest extends TestCase
         $this->assertTrue(DB::connection('single')->table('acc_journal_entries')->where('source_type', 'ACCOUNT_OPENING_BALANCE')->where('source_id', $accountId)->exists());
     }
 
+    public function test_account_show_and_update_opening_balance_work_in_shared_master_mode(): void
+    {
+        $this->useTenantWithSharedMasterMode();
+        $this->createMasterTables('master');
+        $this->createTransactionTables('tenant');
+
+        $cashCategory = AccountCategory::create([
+            'type' => 'ASSET',
+            'category_code' => 'SHARED_OPENING_BALANCE_ASSET',
+            'category_name' => 'Shared Opening Balance Asset',
+            'report_type' => 'BS',
+            'sequence_no' => 1,
+            'status' => true,
+        ]);
+
+        $equityCategory = AccountCategory::create([
+            'type' => 'EQUITY',
+            'category_code' => 'SHARED_OPENING_BALANCE_EQUITY',
+            'category_name' => 'Shared Opening Balance Equity',
+            'report_type' => 'BS',
+            'sequence_no' => 2,
+            'status' => true,
+        ]);
+
+        $equity = Account::create([
+            'category_id' => $equityCategory->id,
+            'code' => '3001',
+            'name' => 'Opening Balance Equity',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $account = Account::create([
+            'category_id' => $cashCategory->id,
+            'code' => '1012',
+            'name' => 'Shared Opening Balance Cash',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $journal = JournalEntry::create([
+            'journal_no' => 'JV/2026/01/1012',
+            'trx_date' => '2026-01-01',
+            'source_type' => 'ACCOUNT_OPENING_BALANCE',
+            'source_id' => $account->id,
+            'reference_no' => 'OPENING-1012',
+            'description' => 'Opening Balance - Shared Opening Balance Cash',
+            'amount' => 1200,
+            'status' => JournalStatus::POSTED,
+            'posted_at' => now(),
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $account->id,
+            'debit' => 1200,
+            'credit' => 0,
+            'description' => 'Opening Balance - Shared Opening Balance Cash',
+        ]);
+
+        JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $equity->id,
+            'debit' => 0,
+            'credit' => 1200,
+            'description' => 'Opening Balance - Shared Opening Balance Cash',
+        ]);
+
+        $showResponse = $this->getJson("/api/accounting/accounts/{$account->id}");
+
+        $showResponse->assertOk()
+            ->assertJsonPath('data.opening_balance.amount', 1200)
+            ->assertJsonPath('data.opening_balance.journal_entry_id', $journal->id)
+            ->assertJsonPath('data.opening_balance.can_edit', true);
+
+        $updateResponse = $this->putJson("/api/accounting/accounts/{$account->id}", [
+            'opening_balance' => 1500,
+            'opening_balance_date' => '2026-01-05',
+        ]);
+
+        $updateResponse->assertOk();
+
+        $this->assertTrue(DB::connection('tenant')->table('acc_journal_entries')->where('id', $journal->id)->where('amount', 1500)->exists());
+        $this->assertTrue(DB::connection('tenant')->table('acc_journal_entries')->where('id', $journal->id)->where('trx_date', '2026-01-05')->exists());
+    }
+
     public function test_master_migration_uses_master_connection_when_shared_database_is_enabled(): void
     {
         $this->useTenantWithSharedMasterMode();

@@ -366,6 +366,76 @@ class AccountOwnershipEnhancementTest extends TestCase
         $this->assertSame('OPENING-7001', $journal->reference_no);
     }
 
+    public function test_account_opening_balance_can_be_edited_with_tenant_visibility(): void
+    {
+        $category = $this->cashCategory();
+        $equityCategory = AccountCategory::where('category_code', 'EQUITY')->firstOrFail();
+
+        $equity = Account::factory()->create([
+            'category_id' => $equityCategory->id,
+            'code' => '3001',
+            'name' => 'Opening Balance Equity',
+            'tenant_id' => null,
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $account = Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '7002',
+            'name' => 'Tenant Editable Opening Balance',
+            'tenant_id' => 'tenant-a',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $journal = JournalEntry::create([
+            'journal_no' => 'JV/2026/01/7002',
+            'trx_date' => '2026-01-01',
+            'source_type' => 'ACCOUNT_OPENING_BALANCE',
+            'source_id' => $account->id,
+            'reference_no' => 'OPENING-7002',
+            'description' => 'Opening Balance - Tenant Editable Opening Balance',
+            'amount' => 500000,
+            'status' => \ESolution\LaravelAccounting\Enums\JournalStatus::POSTED,
+            'posted_at' => now(),
+        ]);
+
+        \ESolution\LaravelAccounting\Models\JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $account->id,
+            'debit' => 500000,
+            'credit' => 0,
+            'description' => 'Opening Balance - Tenant Editable Opening Balance',
+        ]);
+
+        \ESolution\LaravelAccounting\Models\JournalEntryDetail::create([
+            'journal_entry_id' => $journal->id,
+            'account_id' => $equity->id,
+            'debit' => 0,
+            'credit' => 500000,
+            'description' => 'Opening Balance - Tenant Editable Opening Balance',
+        ]);
+
+        $response = $this->withHeader('X-Tenant', 'tenant-a')->putJson("/api/accounting/accounts/{$account->id}", [
+            'opening_balance' => 750000,
+            'opening_balance_date' => '2026-01-03',
+        ]);
+
+        $response->assertOk();
+
+        $journal->refresh();
+
+        $this->assertSame('2026-01-03', optional($journal->trx_date)->toDateString());
+        $this->assertSame(750000.0, (float) $journal->amount);
+
+        $showResponse = $this->withHeader('X-Tenant', 'tenant-a')->getJson("/api/accounting/accounts/{$account->id}");
+
+        $showResponse->assertOk()
+            ->assertJsonPath('data.opening_balance.amount', 750000)
+            ->assertJsonPath('data.opening_balance.can_edit', true);
+    }
+
     protected function cashCategory(): AccountCategory
     {
         return AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
