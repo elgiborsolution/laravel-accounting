@@ -10,7 +10,9 @@ use ESolution\LaravelAccounting\Services\AccountOpeningBalanceService;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 
 class AccountController extends BaseController
@@ -24,6 +26,11 @@ class AccountController extends BaseController
         $validated = $request->validate([
             'category_id' => ['nullable', Rule::exists(AccountCategory::validationTable(), 'id')],
         ]);
+
+        if ($request->has('page') || $request->has('per_page')) {
+            return $this->paginatedIndexResponse($request, $validated);
+        }
+
         $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
         $search = $request->query('search');
         $categoryFilter = $validated['category_id'] ?? null;
@@ -60,7 +67,9 @@ class AccountController extends BaseController
                 });
             }
 
-            $data = $query->orderBy('code')->get();
+            $data = $query
+                ->orderBy('code')
+                ->get();
 
             if ($includeCategory) {
                 $data = $repository->attachCategories($data);
@@ -220,6 +229,48 @@ class AccountController extends BaseController
         Cache::tags(array_merge(['acc_account_categories'], $tenantId ? ['acc_account_categories_tenant_'.$tenantId] : []))->flush();
     }
 
+    protected function paginatedIndexResponse(Request $request, array $validated): LengthAwarePaginator
+    {
+        $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
+        $search = $request->query('search');
+        $categoryFilter = $validated['category_id'] ?? null;
+        $with = $this->normalizeWithParameter($request->query('with'));
+        $includeCategory = in_array('category', $with, true);
+        $includeTreeCategory = in_array('tree_category', $with, true);
+        $includeBalance = in_array('balance', $with, true);
+        $balanceYear = (int) $request->query('year', now()->year);
+        $balanceMonth = (int) $request->query('month', now()->month);
+        $perPage = max(1, (int) $request->query('per_page', 15));
+
+        $repository = app(AccountRepository::class);
+        $query = $repository->visibleQuery($tenantFilter, $categoryFilter);
+
+        if ($search) {
+            $query->where(function ($query) use ($search) {
+                $query->where('code', 'like', "%{$search}%")
+                    ->orWhere('name', 'like', "%{$search}%");
+            });
+        }
+
+        $paginator = $query
+            ->orderBy('code')
+            ->paginate($perPage)
+            ->appends($request->query());
+
+        $accounts = $this->enrichAccountsCollection(
+            $paginator->getCollection(),
+            $includeCategory,
+            $includeTreeCategory,
+            $includeBalance,
+            $balanceYear,
+            $balanceMonth
+        );
+
+        $paginator->setCollection($accounts);
+
+        return $paginator;
+    }
+
     protected function normalizeWithParameter(mixed $with): array
     {
         if (is_array($with)) {
@@ -251,6 +302,31 @@ class AccountController extends BaseController
         sort($with);
 
         return $with;
+    }
+
+    protected function enrichAccountsCollection(
+        Collection $accounts,
+        bool $includeCategory,
+        bool $includeTreeCategory,
+        bool $includeBalance,
+        int $balanceYear,
+        int $balanceMonth
+    ): Collection {
+        $repository = app(AccountRepository::class);
+
+        if ($includeCategory) {
+            $accounts = $repository->attachCategories($accounts);
+        }
+
+        if ($includeTreeCategory) {
+            $accounts = $this->attachTreeCategories($accounts);
+        }
+
+        if ($includeBalance) {
+            $accounts = $this->attachBalances($accounts, $balanceYear, $balanceMonth);
+        }
+
+        return $accounts;
     }
 
     protected function attachTreeCategories($accounts)

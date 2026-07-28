@@ -283,10 +283,20 @@ Query parameters:
 - When provided, only child categories with `parent_id = {id}` are returned.
 - The category with `id = {id}` itself is excluded.
 - If `parent_id` is present, it takes precedence over `root_only`.
+- `has_accounts` `boolean` optional
+- When `true`, only category branches that contain visible accounts are returned.
+- A category remains when it has direct accounts or descendant categories with direct accounts.
+- `search` `string` optional
+- Performs a case-insensitive `LIKE` search against category `category_code` and `category_name`.
+- When `with=accounts` is requested, the same search also filters returned accounts by account `code` and `name`.
+- Parent categories remain when they are needed to keep matching child categories or matching accounts reachable.
 - `year` `integer` optional
 - Used only when `with=balance` is requested. Defaults to current year.
 - `month` `integer` optional
 - Used only when `with=balance` is requested. Defaults to current month.
+- `page` `integer` optional
+- `per_page` `integer` optional
+- When either `page` or `per_page` is present, the endpoint returns Laravel's native `LengthAwarePaginator` payload directly instead of the package success envelope.
 
 Response body:
 
@@ -303,6 +313,9 @@ Response body:
 - When `with=balance`, each category includes `balance`.
 - When `with=accounts,balance`, each account inside `accounts` also includes `balance`.
 - When both are requested, both relations are present.
+- When `search` is used together with `with=children`, only matching child branches remain recursively.
+- When `search` is used together with `with=accounts`, only matching accounts are serialized.
+- When `search` is used together with `has_accounts=true`, only matching account-bearing branches remain.
 
 Validation rules: none, this endpoint only reads query parameters.
 
@@ -319,12 +332,27 @@ curl --location 'http://127.0.0.1:8000/api/accounting/categories?root_only=true&
 ```
 
 ```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/categories?with=children&search=fixed' \
+--header 'Accept: application/json'
+```
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/categories?with=children,accounts&search=cash&has_accounts=true' \
+--header 'Accept: application/json'
+```
+
+```bash
 curl --location 'http://127.0.0.1:8000/api/accounting/categories?with=balance&year=2026&month=7' \
 --header 'Accept: application/json'
 ```
 
 ```bash
 curl --location 'http://127.0.0.1:8000/api/accounting/categories?with=accounts,balance&year=2026&month=7' \
+--header 'Accept: application/json'
+```
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/categories?page=1&per_page=10&search=fixed&has_accounts=true' \
 --header 'Accept: application/json'
 ```
 
@@ -362,6 +390,52 @@ Example response:
 }
 ```
 
+Example paginated response:
+
+```json
+{
+  "current_page": 1,
+  "data": [
+    {
+      "id": "uuid",
+      "category_code": "FIXED_ASSET",
+      "category_name": "Fixed Asset",
+      "type": "ASSET",
+      "parent_id": "parent-uuid",
+      "sequence_no": 2,
+      "is_active": true
+    }
+  ],
+  "first_page_url": "http://127.0.0.1:8000/api/accounting/categories?page=1&per_page=10&search=fixed&has_accounts=true",
+  "from": 1,
+  "last_page": 1,
+  "last_page_url": "http://127.0.0.1:8000/api/accounting/categories?page=1&per_page=10&search=fixed&has_accounts=true",
+  "links": [
+    {
+      "url": null,
+      "label": "Previous",
+      "active": false
+    },
+    {
+      "url": "http://127.0.0.1:8000/api/accounting/categories?page=1&per_page=10&search=fixed&has_accounts=true",
+      "label": "1",
+      "active": true
+    },
+    {
+      "url": null,
+      "label": "Next",
+      "active": false
+    }
+  ],
+  "next_page_url": null,
+  "path": "http://127.0.0.1:8000/api/accounting/categories",
+  "per_page": 10,
+  "prev_page_url": null,
+  "to": 1,
+  "total": 1
+}
+```
+
 Notes:
 
 - `with=children` switches the endpoint into hierarchical/tree mode.
@@ -369,7 +443,9 @@ Notes:
 - When `with=accounts` is used, account visibility follows the resolved tenant context, not a query parameter.
 - `with=balance` reuses the existing account balance service and loads account balances in bulk before aggregating category totals in memory.
 - Category balance is calculated recursively from direct child accounts and descendant categories.
-- Cache keys are parameter-aware, so `root_only`, `parent_id`, and `with` combinations are cached separately.
+- `search` prunes category branches in memory after categories and visible accounts are loaded once.
+- `has_accounts=true` prunes category branches in memory without recursive database queries.
+- Cache keys are parameter-aware, so `root_only`, `parent_id`, `search`, `has_accounts`, and `with` combinations are cached separately.
 
 ### POST `/api/accounting/categories`
 

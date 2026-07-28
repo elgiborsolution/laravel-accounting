@@ -237,6 +237,79 @@ class AccountControllerTest extends TestCase
             ->assertJsonPath('data.0.tree_category.2.id', $leaf->id);
     }
 
+    public function test_paginated_accounts_index_returns_native_laravel_paginator(): void
+    {
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
+
+        foreach (range(1, 4) as $index) {
+            Account::factory()->create([
+                'category_id' => $category->id,
+                'code' => '10'.$index,
+                'name' => 'Account '.$index,
+            ]);
+        }
+
+        $response = $this->getJson('/api/accounting/accounts?page=1&per_page=2');
+
+        $response->assertOk()
+            ->assertJsonMissingPath('status')
+            ->assertJsonMissingPath('message')
+            ->assertJsonPath('current_page', 1)
+            ->assertJsonPath('per_page', 2)
+            ->assertJsonPath('path', url('/api/accounting/accounts'));
+
+        $this->assertCount(2, $response->json('data'));
+        $this->assertArrayHasKey('total', $response->json());
+        $this->assertArrayHasKey('links', $response->json());
+    }
+
+    public function test_paginated_accounts_index_preserves_filters_and_relationships(): void
+    {
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
+        $otherCategory = AccountCategory::where('category_code', 'ACCOUNT_RECEIVABLE')->firstOrFail();
+
+        $matching = Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '1101',
+            'name' => 'Cash Alpha',
+        ]);
+
+        MonthlyBalance::create([
+            'fiscal_year' => 2026,
+            'fiscal_month' => 7,
+            'account_id' => $matching->id,
+            'opening_balance' => 10,
+            'total_debit' => 5,
+            'total_credit' => 0,
+            'ending_balance' => 15,
+            'journal_count' => 1,
+            'closed_at' => now(),
+            'closed_by' => null,
+        ]);
+
+        Account::factory()->create([
+            'category_id' => $category->id,
+            'code' => '2201',
+            'name' => 'Cash Beta',
+        ]);
+
+        Account::factory()->create([
+            'category_id' => $otherCategory->id,
+            'code' => '3301',
+            'name' => 'Receivable Alpha',
+        ]);
+
+        $response = $this->getJson('/api/accounting/accounts?page=1&per_page=5&category_id='.$category->id.'&search=Alpha&with=category,balance&year=2026&month=7');
+
+        $response->assertOk()
+            ->assertJsonMissingPath('status')
+            ->assertJsonMissingPath('message')
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $matching->id)
+            ->assertJsonPath('data.0.category.id', $category->id)
+            ->assertJsonPath('data.0.balance.ending_balance', 15);
+    }
+
     public function test_can_create_account()
     {
         $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();

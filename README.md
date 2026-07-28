@@ -558,9 +558,15 @@ The current route set is:
 - `with=children`
 - `with=accounts`
 - `with=balance`
+- `has_accounts=true`
+- `search={term}`
 - comma-separated combinations such as `with=accounts,balance`
 
-When `with=balance` is requested, category balances are aggregated recursively from visible account balances using the existing account balance engine. When `with=accounts,balance` is requested, each returned account also includes its `balance`.
+When `search` is provided, the endpoint matches category `category_code` and `category_name` case-insensitively, and when `with=accounts` is requested it also filters returned accounts by account `code` and `name`. Parent categories remain when they are needed to keep matching child categories or matching accounts reachable.
+
+When `has_accounts=true` is provided, only category branches that contain visible accounts remain. This also works together with `search`, `with=children`, pagination, and `with=accounts`.
+
+When `with=balance` is requested, category balances are aggregated recursively from visible account balances inside the remaining category branches. When `with=accounts,balance` is requested, each returned account also includes its `balance`.
 - `POST /api/accounting/services`
 - `GET /api/accounting/services/{id}`
 - `PUT /api/accounting/services/{id}`

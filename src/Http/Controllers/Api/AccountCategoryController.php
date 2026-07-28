@@ -11,7 +11,9 @@ use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Services\AccountBalanceService;
 use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 
 class AccountCategoryController extends BaseController
@@ -22,10 +24,16 @@ class AccountCategoryController extends BaseController
     {
         $this->initializeTenantIfNeeded($tenantId);
 
+        if ($request->has('page') || $request->has('per_page')) {
+            return $this->paginatedIndexResponse($request, $tenantId);
+        }
+
         $with = $this->normalizeWithParameter($request->query('with'));
         $includeAccounts = in_array('accounts', $with, true);
         $includeChildren = in_array('children', $with, true);
         $includeBalance = in_array('balance', $with, true);
+        $hasAccounts = filter_var($request->query('has_accounts', false), FILTER_VALIDATE_BOOLEAN);
+        $search = $this->normalizeSearchTerm($request->query('search'));
         $rootOnly = filter_var($request->query('root_only', false), FILTER_VALIDATE_BOOLEAN);
         $parentId = $this->normalizeParentId($request->query('parent_id'));
         $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
@@ -36,12 +44,14 @@ class AccountCategoryController extends BaseController
             .($includeChildren ? 'tree' : 'flat')
             .'_parent_'.md5((string) ($parentId ?? '__all__'))
             .'_root_'.($rootOnly ? '1' : '0')
+            .'_has_accounts_'.($hasAccounts ? '1' : '0')
+            .($search ? '_search_'.md5($search) : '')
             .'_with_'.($with ? implode('-', $with) : 'none')
             .'_tenant_'.md5((string) ($tenantFilter ?? '__central__'))
             .($includeBalance ? '_period_'.$balanceYear.'_'.$balanceMonth : '');
 
         $cacheTags = $this->getCacheTags($tenantId);
-        if ($includeBalance) {
+        if ($includeBalance || $hasAccounts || $search !== null) {
             $cacheTags = array_values(array_unique(array_merge(
                 $cacheTags,
                 ['acc_accounts', 'acc_journals'],
@@ -53,6 +63,8 @@ class AccountCategoryController extends BaseController
             $includeAccounts,
             $includeChildren,
             $includeBalance,
+            $hasAccounts,
+            $search,
             $rootOnly,
             $parentId,
             $tenantFilter,
@@ -62,6 +74,22 @@ class AccountCategoryController extends BaseController
             $categoryRepository = app(AccountCategoryRepository::class);
             $treeService = app(AccountCategoryTreeService::class);
             $allCategories = $categoryRepository->allOrdered();
+            $visibleAccounts = ($includeAccounts || $includeBalance || $hasAccounts || $search !== null)
+                ? app(AccountRepository::class)->visibleOrdered($tenantFilter)
+                : collect();
+            $matchedAccounts = $this->filterAccountsBySearch($visibleAccounts, $search);
+
+            if ($hasAccounts || $search !== null) {
+                $allCategories = $this->filterCategoriesForSearch($allCategories, $matchedAccounts, $search, $hasAccounts);
+            }
+
+            $balanceAccounts = $visibleAccounts
+                ->filter(fn (Account $account) => $allCategories->contains('id', $account->category_id))
+                ->values();
+            $relationAccounts = ($search !== null ? $matchedAccounts : $visibleAccounts)
+                ->filter(fn (Account $account) => $allCategories->contains('id', $account->category_id))
+                ->values();
+
             $categories = $allCategories;
 
             if ($parentId !== null) {
@@ -70,25 +98,24 @@ class AccountCategoryController extends BaseController
                 $categories = $categories->whereNull('parent_id')->values();
             }
 
-            $accounts = ($includeAccounts || $includeBalance)
-                ? app(AccountRepository::class)->visibleOrdered($tenantFilter)
-                : collect();
-
             $accountBalanceMap = $includeBalance
-                ? app(AccountBalanceService::class)->getBalances($accounts->pluck('id')->all(), $balanceYear, $balanceMonth)
+                ? app(AccountBalanceService::class)->getBalances($balanceAccounts->pluck('id')->all(), $balanceYear, $balanceMonth)
                 : collect();
 
             if ($includeBalance) {
-                $accounts = $this->attachAccountBalances($accounts, $accountBalanceMap);
+                $balanceAccounts = $this->attachAccountBalances($balanceAccounts, $accountBalanceMap);
+                if ($includeAccounts) {
+                    $relationAccounts = $this->attachAccountBalances($relationAccounts, $accountBalanceMap);
+                }
             }
 
             $categoryBalanceMap = $includeBalance
-                ? $this->buildCategoryBalanceMap($allCategories, $accounts, $accountBalanceMap)
+                ? $this->buildCategoryBalanceMap($allCategories, $balanceAccounts, $accountBalanceMap)
                 : collect();
 
             if ($includeChildren) {
                 $nodes = $categories
-                    ->map(fn (AccountCategory $category) => $treeService->buildNode($category, $allCategories, $accounts))
+                    ->map(fn (AccountCategory $category) => $treeService->buildNode($category, $allCategories, $includeAccounts ? $relationAccounts : $balanceAccounts))
                     ->values();
 
                 if ($includeBalance) {
@@ -99,7 +126,7 @@ class AccountCategoryController extends BaseController
             }
 
             if ($includeAccounts) {
-                $categories = $categoryRepository->attachAccounts($categories, $accounts);
+                $categories = $categoryRepository->attachAccounts($categories, $relationAccounts);
             }
 
             if ($includeBalance) {
@@ -233,6 +260,139 @@ class AccountCategoryController extends BaseController
         Cache::tags(array_merge(['acc_accounts'], $tenantId ? ['acc_accounts_tenant_'.$tenantId] : []))->flush();
     }
 
+    protected function paginatedIndexResponse(Request $request, $tenantId = null): LengthAwarePaginator
+    {
+        $items = $this->buildIndexPayload($request, $tenantId);
+        $perPage = max(1, (int) $request->query('per_page', 15));
+        $currentPage = max(1, (int) $request->query('page', 1));
+        $paginator = new LengthAwarePaginator(
+            $items->forPage($currentPage, $perPage)->values(),
+            $items->count(),
+            $perPage,
+            $currentPage,
+            [
+                'path' => $request->url(),
+                'pageName' => 'page',
+            ]
+        );
+
+        $paginator->appends($request->query());
+
+        return $paginator;
+    }
+
+    protected function buildIndexPayload(Request $request, $tenantId = null): Collection
+    {
+        $with = $this->normalizeWithParameter($request->query('with'));
+        $includeAccounts = in_array('accounts', $with, true);
+        $includeChildren = in_array('children', $with, true);
+        $includeBalance = in_array('balance', $with, true);
+        $hasAccounts = filter_var($request->query('has_accounts', false), FILTER_VALIDATE_BOOLEAN);
+        $search = $this->normalizeSearchTerm($request->query('search'));
+        $rootOnly = filter_var($request->query('root_only', false), FILTER_VALIDATE_BOOLEAN);
+        $parentId = $this->normalizeParentId($request->query('parent_id'));
+        $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
+        $balanceYear = (int) $request->query('year', now()->year);
+        $balanceMonth = (int) $request->query('month', now()->month);
+
+        $cacheKey = 'index_payload_'
+            .($includeChildren ? 'tree' : 'flat')
+            .'_parent_'.md5((string) ($parentId ?? '__all__'))
+            .'_root_'.($rootOnly ? '1' : '0')
+            .'_has_accounts_'.($hasAccounts ? '1' : '0')
+            .($search ? '_search_'.md5($search) : '')
+            .'_with_'.($with ? implode('-', $with) : 'none')
+            .'_tenant_'.md5((string) ($tenantFilter ?? '__central__'))
+            .($includeBalance ? '_period_'.$balanceYear.'_'.$balanceMonth : '');
+
+        $cacheTags = $this->getCacheTags($tenantId);
+        if ($includeBalance || $hasAccounts || $search !== null) {
+            $cacheTags = array_values(array_unique(array_merge(
+                $cacheTags,
+                ['acc_accounts', 'acc_journals'],
+                $tenantId ? ['acc_accounts_tenant_'.$tenantId, 'acc_journals_tenant_'.$tenantId] : []
+            )));
+        }
+
+        return Cache::tags($cacheTags)->rememberForever($cacheKey, function () use (
+            $request,
+            $includeAccounts,
+            $includeChildren,
+            $includeBalance,
+            $hasAccounts,
+            $search,
+            $rootOnly,
+            $parentId,
+            $tenantFilter,
+            $balanceYear,
+            $balanceMonth
+        ) {
+            $categoryRepository = app(AccountCategoryRepository::class);
+            $treeService = app(AccountCategoryTreeService::class);
+            $allCategories = $categoryRepository->allOrdered();
+            $visibleAccounts = ($includeAccounts || $includeBalance || $hasAccounts || $search !== null)
+                ? app(AccountRepository::class)->visibleOrdered($tenantFilter)
+                : collect();
+            $matchedAccounts = $this->filterAccountsBySearch($visibleAccounts, $search);
+
+            if ($hasAccounts || $search !== null) {
+                $allCategories = $this->filterCategoriesForSearch($allCategories, $matchedAccounts, $search, $hasAccounts);
+            }
+
+            $balanceAccounts = $visibleAccounts
+                ->filter(fn (Account $account) => $allCategories->contains('id', $account->category_id))
+                ->values();
+            $relationAccounts = ($search !== null ? $matchedAccounts : $visibleAccounts)
+                ->filter(fn (Account $account) => $allCategories->contains('id', $account->category_id))
+                ->values();
+
+            $categories = $allCategories;
+
+            if ($parentId !== null) {
+                $categories = $categories->where('parent_id', $parentId)->values();
+            } elseif ($rootOnly || $includeChildren) {
+                $categories = $categories->whereNull('parent_id')->values();
+            }
+
+            $accountBalanceMap = $includeBalance
+                ? app(AccountBalanceService::class)->getBalances($balanceAccounts->pluck('id')->all(), $balanceYear, $balanceMonth)
+                : collect();
+
+            if ($includeBalance) {
+                $balanceAccounts = $this->attachAccountBalances($balanceAccounts, $accountBalanceMap);
+                if ($includeAccounts) {
+                    $relationAccounts = $this->attachAccountBalances($relationAccounts, $accountBalanceMap);
+                }
+            }
+
+            $categoryBalanceMap = $includeBalance
+                ? $this->buildCategoryBalanceMap($allCategories, $balanceAccounts, $accountBalanceMap)
+                : collect();
+
+            if ($includeChildren) {
+                $nodes = $categories
+                    ->map(fn (AccountCategory $category) => $treeService->buildNode($category, $allCategories, $includeAccounts ? $relationAccounts : $balanceAccounts))
+                    ->values();
+
+                if ($includeBalance) {
+                    $nodes = $this->attachBalancesToTree($nodes, $categoryBalanceMap);
+                }
+
+                return $this->stripMissingRelationsFromTree($nodes, $includeAccounts, $includeBalance)->values();
+            }
+
+            if ($includeAccounts) {
+                $categories = $categoryRepository->attachAccounts($categories, $relationAccounts);
+            }
+
+            if ($includeBalance) {
+                $categories = $this->attachCategoryBalances($categories, $categoryBalanceMap);
+            }
+
+            return collect(AccountCategoryResource::collection($categories)->resolve($request));
+        });
+    }
+
     protected function normalizeWithParameter(mixed $with): array
     {
         if (is_array($with)) {
@@ -263,6 +423,73 @@ class AccountCategoryController extends BaseController
         sort($with);
 
         return $with;
+    }
+
+    protected function filterCategoriesForSearch(Collection $categories, Collection $matchedAccounts, ?string $search, bool $hasAccounts): Collection
+    {
+        if ($hasAccounts && $matchedAccounts->isEmpty()) {
+            return collect();
+        }
+
+        $categoriesById = $categories->keyBy('id');
+        $includedIds = [];
+
+        if ($search !== null && ! $hasAccounts) {
+            foreach ($categories as $category) {
+                if ($this->matchesSearch($category->category_code, $search) || $this->matchesSearch($category->category_name, $search)) {
+                    $current = $category;
+
+                    while ($current) {
+                        $includedIds[$current->id] = true;
+                        $current = $current->parent_id ? $categoriesById->get($current->parent_id) : null;
+                    }
+                }
+            }
+        }
+
+        foreach ($matchedAccounts->pluck('category_id')->filter()->unique() as $categoryId) {
+            $current = $categoriesById->get($categoryId);
+
+            while ($current) {
+                $includedIds[$current->id] = true;
+                $current = $current->parent_id ? $categoriesById->get($current->parent_id) : null;
+            }
+        }
+
+        return $categories
+            ->filter(fn (AccountCategory $category) => isset($includedIds[$category->id]))
+            ->values();
+    }
+
+    protected function filterAccountsBySearch(Collection $accounts, ?string $search): Collection
+    {
+        if ($search === null) {
+            return $accounts->values();
+        }
+
+        return $accounts
+            ->filter(fn (Account $account) => $this->matchesSearch($account->code, $search) || $this->matchesSearch($account->name, $search))
+            ->values();
+    }
+
+    protected function normalizeSearchTerm($search): ?string
+    {
+        if ($search === null) {
+            return null;
+        }
+
+        $search = trim((string) $search);
+
+        return $search === '' ? null : $search;
+    }
+
+    protected function matchesSearch(?string $value, string $search): bool
+    {
+        if ($value === null) {
+            return false;
+        }
+
+        return str_contains(strtolower($value), strtolower($search));
     }
 
     protected function normalizeParentId($parentId): ?string

@@ -219,6 +219,436 @@ class AccountCategoryTreeTest extends TestCase
         $this->assertArrayHasKey('accounts', $node);
     }
 
+    public function test_account_categories_index_returns_native_laravel_pagination_when_page_is_requested(): void
+    {
+        AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'PAGINATED_CATEGORY_TEST',
+            'category_name' => 'Paginated Category Test',
+            'report_type' => 'BS',
+            'sequence_no' => 999,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?page=1&per_page=5');
+
+        $response->assertOk()
+            ->assertJsonMissingPath('status')
+            ->assertJsonMissingPath('message')
+            ->assertJsonPath('current_page', 1)
+            ->assertJsonPath('per_page', 5)
+            ->assertJsonPath('path', url('/api/accounting/categories'));
+
+        $this->assertIsArray($response->json('data'));
+        $this->assertCount(5, $response->json('data'));
+        $this->assertArrayHasKey('links', $response->json());
+        $this->assertArrayHasKey('total', $response->json());
+    }
+
+    public function test_account_categories_index_uses_native_laravel_pagination_when_only_per_page_is_requested(): void
+    {
+        $response = $this->getJson('/api/accounting/categories?per_page=3');
+
+        $response->assertOk()
+            ->assertJsonMissingPath('status')
+            ->assertJsonMissingPath('message')
+            ->assertJsonPath('current_page', 1)
+            ->assertJsonPath('per_page', 3);
+
+        $this->assertCount(3, $response->json('data'));
+        $this->assertSame(url('/api/accounting/categories').'?per_page=3&page=2', $response->json('next_page_url'));
+    }
+
+    public function test_account_categories_index_can_prune_empty_branches_when_has_accounts_is_true(): void
+    {
+        $parentA = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_PARENT_A',
+            'category_name' => 'Has Account Parent A',
+            'report_type' => 'BS',
+            'sequence_no' => 200,
+            'status' => true,
+        ]);
+
+        $childA = AccountCategory::create([
+            'parent_id' => $parentA->id,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_CHILD_A',
+            'category_name' => 'Has Account Child A',
+            'report_type' => 'BS',
+            'sequence_no' => 201,
+            'status' => true,
+        ]);
+
+        $parentB = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_PARENT_B',
+            'category_name' => 'Has Account Parent B',
+            'report_type' => 'BS',
+            'sequence_no' => 202,
+            'status' => true,
+        ]);
+
+        $childB1 = AccountCategory::create([
+            'parent_id' => $parentB->id,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_CHILD_B1',
+            'category_name' => 'Has Account Child B1',
+            'report_type' => 'BS',
+            'sequence_no' => 203,
+            'status' => true,
+        ]);
+
+        $childB2 = AccountCategory::create([
+            'parent_id' => $parentB->id,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_CHILD_B2',
+            'category_name' => 'Has Account Child B2',
+            'report_type' => 'BS',
+            'sequence_no' => 204,
+            'status' => true,
+        ]);
+
+        $parentC = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_PARENT_C',
+            'category_name' => 'Has Account Parent C',
+            'report_type' => 'BS',
+            'sequence_no' => 205,
+            'status' => true,
+        ]);
+
+        AccountCategory::create([
+            'parent_id' => $parentC->id,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_CHILD_C',
+            'category_name' => 'Has Account Child C',
+            'report_type' => 'BS',
+            'sequence_no' => 206,
+            'status' => true,
+        ]);
+
+        Account::create([
+            'category_id' => $childA->id,
+            'code' => '9401',
+            'name' => 'Branch A Account',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $branchBAccount = Account::create([
+            'category_id' => $childB1->id,
+            'code' => '9402',
+            'name' => 'Branch B Account',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?with=children,accounts&has_accounts=true');
+
+        $response->assertOk();
+
+        $data = collect($response->json('data'));
+        $parentANode = $data->firstWhere('id', $parentA->id);
+        $parentBNode = $data->firstWhere('id', $parentB->id);
+
+        $this->assertCount(2, $data);
+        $this->assertNull($data->firstWhere('id', $parentC->id));
+        $this->assertSame($childA->id, data_get($parentANode, 'children.0.id'));
+        $this->assertSame($childB1->id, data_get($parentBNode, 'children.0.id'));
+        $this->assertCount(1, data_get($parentBNode, 'children'));
+        $this->assertSame($branchBAccount->id, data_get($parentBNode, 'children.0.accounts.0.id'));
+        $this->assertNull(collect(data_get($parentBNode, 'children', []))->firstWhere('id', $childB2->id));
+    }
+
+    public function test_account_categories_index_can_filter_flat_results_when_has_accounts_is_true(): void
+    {
+        $parent = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_FLAT_PARENT',
+            'category_name' => 'Has Account Flat Parent',
+            'report_type' => 'BS',
+            'sequence_no' => 210,
+            'status' => true,
+        ]);
+
+        $childWithAccount = AccountCategory::create([
+            'parent_id' => $parent->id,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_FLAT_CHILD_OK',
+            'category_name' => 'Has Account Flat Child Ok',
+            'report_type' => 'BS',
+            'sequence_no' => 211,
+            'status' => true,
+        ]);
+
+        $childWithoutAccount = AccountCategory::create([
+            'parent_id' => $parent->id,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_FLAT_CHILD_EMPTY',
+            'category_name' => 'Has Account Flat Child Empty',
+            'report_type' => 'BS',
+            'sequence_no' => 212,
+            'status' => true,
+        ]);
+
+        Account::create([
+            'category_id' => $childWithAccount->id,
+            'code' => '9501',
+            'name' => 'Flat Branch Account',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?has_accounts=true');
+
+        $response->assertOk();
+
+        $data = collect($response->json('data'));
+
+        $this->assertNotNull($data->firstWhere('id', $parent->id));
+        $this->assertNotNull($data->firstWhere('id', $childWithAccount->id));
+        $this->assertNull($data->firstWhere('id', $childWithoutAccount->id));
+    }
+
+    public function test_account_categories_index_applies_has_accounts_filter_to_paginated_response(): void
+    {
+        $parent = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_PAGE_PARENT',
+            'category_name' => 'Has Account Page Parent',
+            'report_type' => 'BS',
+            'sequence_no' => 220,
+            'status' => true,
+        ]);
+
+        $child = AccountCategory::create([
+            'parent_id' => $parent->id,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_PAGE_CHILD',
+            'category_name' => 'Has Account Page Child',
+            'report_type' => 'BS',
+            'sequence_no' => 221,
+            'status' => true,
+        ]);
+
+        AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'HAS_ACCOUNT_PAGE_EMPTY',
+            'category_name' => 'Has Account Page Empty',
+            'report_type' => 'BS',
+            'sequence_no' => 222,
+            'status' => true,
+        ]);
+
+        Account::create([
+            'category_id' => $child->id,
+            'code' => '9601',
+            'name' => 'Paginated Branch Account',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?page=1&per_page=10&has_accounts=true');
+
+        $response->assertOk()
+            ->assertJsonMissingPath('status')
+            ->assertJsonMissingPath('message')
+            ->assertJsonPath('total', 2);
+
+        $data = collect($response->json('data'));
+
+        $this->assertNotNull($data->firstWhere('id', $parent->id));
+        $this->assertNotNull($data->firstWhere('id', $child->id));
+    }
+
+    public function test_account_categories_index_can_search_categories_by_name(): void
+    {
+        $matching = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_ZETA_ASSET',
+            'category_name' => 'Zeta Asset Search',
+            'report_type' => 'BS',
+            'sequence_no' => 230,
+            'status' => true,
+        ]);
+
+        AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_ALPHA_ASSET',
+            'category_name' => 'Alpha Asset Search',
+            'report_type' => 'BS',
+            'sequence_no' => 231,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?search=zeta');
+
+        $response->assertOk();
+
+        $data = collect($response->json('data'));
+
+        $this->assertNotNull($data->firstWhere('id', $matching->id));
+        $this->assertCount(1, $data->whereIn('id', [$matching->id])->values());
+    }
+
+    public function test_account_categories_index_can_search_children_recursively(): void
+    {
+        $parent = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_PARENT_ASSET',
+            'category_name' => 'Assets Search Parent',
+            'report_type' => 'BS',
+            'sequence_no' => 240,
+            'status' => true,
+        ]);
+
+        AccountCategory::create([
+            'parent_id' => $parent->id,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_CHILD_ALPHA',
+            'category_name' => 'Alpha Assets Search Child',
+            'report_type' => 'BS',
+            'sequence_no' => 241,
+            'status' => true,
+        ]);
+
+        $matchingChild = AccountCategory::create([
+            'parent_id' => $parent->id,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_CHILD_ZETA',
+            'category_name' => 'Zeta Assets Search Child',
+            'report_type' => 'BS',
+            'sequence_no' => 242,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?with=children&search=zeta');
+
+        $response->assertOk();
+
+        $data = collect($response->json('data'));
+        $parentNode = $data->firstWhere('id', $parent->id);
+
+        $this->assertNotNull($parentNode);
+        $this->assertCount(1, data_get($parentNode, 'children'));
+        $this->assertSame($matchingChild->id, data_get($parentNode, 'children.0.id'));
+    }
+
+    public function test_account_categories_index_can_search_accounts_when_with_accounts_is_requested(): void
+    {
+        $parent = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_ACCOUNT_PARENT',
+            'category_name' => 'Search Account Parent',
+            'report_type' => 'BS',
+            'sequence_no' => 250,
+            'status' => true,
+        ]);
+
+        $child = AccountCategory::create([
+            'parent_id' => $parent->id,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_ACCOUNT_CHILD',
+            'category_name' => 'Search Account Child',
+            'report_type' => 'BS',
+            'sequence_no' => 251,
+            'status' => true,
+        ]);
+
+        $matchingAccount = Account::create([
+            'category_id' => $child->id,
+            'code' => '9701',
+            'name' => 'Cash Search Match',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        Account::create([
+            'category_id' => $child->id,
+            'code' => '9702',
+            'name' => 'Bank Search Miss',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?with=children,accounts&search=cash');
+
+        $response->assertOk();
+
+        $data = collect($response->json('data'));
+        $parentNode = $data->firstWhere('id', $parent->id);
+
+        $this->assertNotNull($parentNode);
+        $this->assertSame($child->id, data_get($parentNode, 'children.0.id'));
+        $this->assertCount(1, data_get($parentNode, 'children.0.accounts'));
+        $this->assertSame($matchingAccount->id, data_get($parentNode, 'children.0.accounts.0.id'));
+    }
+
+    public function test_account_categories_index_combines_search_with_has_accounts_and_pagination(): void
+    {
+        $parent = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_PAGE_PARENT',
+            'category_name' => 'Search Page Parent',
+            'report_type' => 'BS',
+            'sequence_no' => 260,
+            'status' => true,
+        ]);
+
+        $matchingChild = AccountCategory::create([
+            'parent_id' => $parent->id,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_PAGE_CHILD_ZETA',
+            'category_name' => 'Zeta Search Page Child',
+            'report_type' => 'BS',
+            'sequence_no' => 261,
+            'status' => true,
+        ]);
+
+        AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'SEARCH_PAGE_EMPTY',
+            'category_name' => 'Zeta Search Empty',
+            'report_type' => 'BS',
+            'sequence_no' => 262,
+            'status' => true,
+        ]);
+
+        Account::create([
+            'category_id' => $matchingChild->id,
+            'code' => '9801',
+            'name' => 'Zeta Search Account',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?page=1&per_page=10&search=zeta&has_accounts=true');
+
+        $response->assertOk()
+            ->assertJsonMissingPath('status')
+            ->assertJsonMissingPath('message')
+            ->assertJsonPath('total', 2);
+
+        $data = collect($response->json('data'));
+
+        $this->assertNotNull($data->firstWhere('id', $parent->id));
+        $this->assertNotNull($data->firstWhere('id', $matchingChild->id));
+    }
+
     public function test_account_categories_index_can_include_balance_recursively(): void
     {
         $asset = AccountCategory::create([
