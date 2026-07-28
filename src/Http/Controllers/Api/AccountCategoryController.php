@@ -23,9 +23,14 @@ class AccountCategoryController extends BaseController
     public function index(Request $request, $tenantId = null)
     {
         $this->initializeTenantIfNeeded($tenantId);
+        $normalizedType = $this->normalizeCategoryType($request->query('type'));
+        $validated = validator(
+            ['type' => $normalizedType],
+            ['type' => ['nullable', Rule::in($this->allowedCategoryTypes())]]
+        )->validate();
 
         if ($request->has('page') || $request->has('per_page')) {
-            return $this->paginatedIndexResponse($request, $tenantId);
+            return $this->paginatedIndexResponse($request, $tenantId, $validated);
         }
 
         $with = $this->normalizeWithParameter($request->query('with'));
@@ -34,6 +39,7 @@ class AccountCategoryController extends BaseController
         $includeBalance = in_array('balance', $with, true);
         $hasAccounts = filter_var($request->query('has_accounts', false), FILTER_VALIDATE_BOOLEAN);
         $search = $this->normalizeSearchTerm($request->query('search'));
+        $type = $this->normalizeCategoryType($validated['type'] ?? null);
         $rootOnly = filter_var($request->query('root_only', false), FILTER_VALIDATE_BOOLEAN);
         $parentId = $this->normalizeParentId($request->query('parent_id'));
         $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
@@ -46,6 +52,7 @@ class AccountCategoryController extends BaseController
             .'_root_'.($rootOnly ? '1' : '0')
             .'_has_accounts_'.($hasAccounts ? '1' : '0')
             .($search ? '_search_'.md5($search) : '')
+            .'_type_'.md5((string) ($type ?? '__all__'))
             .'_with_'.($with ? implode('-', $with) : 'none')
             .'_tenant_'.md5((string) ($tenantFilter ?? '__central__'))
             .($includeBalance ? '_period_'.$balanceYear.'_'.$balanceMonth : '');
@@ -65,6 +72,7 @@ class AccountCategoryController extends BaseController
             $includeBalance,
             $hasAccounts,
             $search,
+            $type,
             $rootOnly,
             $parentId,
             $tenantFilter,
@@ -74,6 +82,9 @@ class AccountCategoryController extends BaseController
             $categoryRepository = app(AccountCategoryRepository::class);
             $treeService = app(AccountCategoryTreeService::class);
             $allCategories = $categoryRepository->allOrdered();
+            if ($type !== null) {
+                $allCategories = $allCategories->filter(fn (AccountCategory $category) => strtolower((string) $category->getRawOriginal('type')) === $type)->values();
+            }
             $visibleAccounts = ($includeAccounts || $includeBalance || $hasAccounts || $search !== null)
                 ? app(AccountRepository::class)->visibleOrdered($tenantFilter)
                 : collect();
@@ -260,9 +271,9 @@ class AccountCategoryController extends BaseController
         Cache::tags(array_merge(['acc_accounts'], $tenantId ? ['acc_accounts_tenant_'.$tenantId] : []))->flush();
     }
 
-    protected function paginatedIndexResponse(Request $request, $tenantId = null): LengthAwarePaginator
+    protected function paginatedIndexResponse(Request $request, $tenantId = null, array $validated = []): LengthAwarePaginator
     {
-        $items = $this->buildIndexPayload($request, $tenantId);
+        $items = $this->buildIndexPayload($request, $tenantId, $validated);
         $perPage = max(1, (int) $request->query('per_page', 15));
         $currentPage = max(1, (int) $request->query('page', 1));
         $paginator = new LengthAwarePaginator(
@@ -281,7 +292,7 @@ class AccountCategoryController extends BaseController
         return $paginator;
     }
 
-    protected function buildIndexPayload(Request $request, $tenantId = null): Collection
+    protected function buildIndexPayload(Request $request, $tenantId = null, array $validated = []): Collection
     {
         $with = $this->normalizeWithParameter($request->query('with'));
         $includeAccounts = in_array('accounts', $with, true);
@@ -289,6 +300,7 @@ class AccountCategoryController extends BaseController
         $includeBalance = in_array('balance', $with, true);
         $hasAccounts = filter_var($request->query('has_accounts', false), FILTER_VALIDATE_BOOLEAN);
         $search = $this->normalizeSearchTerm($request->query('search'));
+        $type = $this->normalizeCategoryType($validated['type'] ?? $request->query('type'));
         $rootOnly = filter_var($request->query('root_only', false), FILTER_VALIDATE_BOOLEAN);
         $parentId = $this->normalizeParentId($request->query('parent_id'));
         $tenantFilter = $this->resolveCurrentTenantIdentifier($request);
@@ -301,6 +313,7 @@ class AccountCategoryController extends BaseController
             .'_root_'.($rootOnly ? '1' : '0')
             .'_has_accounts_'.($hasAccounts ? '1' : '0')
             .($search ? '_search_'.md5($search) : '')
+            .'_type_'.md5((string) ($type ?? '__all__'))
             .'_with_'.($with ? implode('-', $with) : 'none')
             .'_tenant_'.md5((string) ($tenantFilter ?? '__central__'))
             .($includeBalance ? '_period_'.$balanceYear.'_'.$balanceMonth : '');
@@ -321,6 +334,7 @@ class AccountCategoryController extends BaseController
             $includeBalance,
             $hasAccounts,
             $search,
+            $type,
             $rootOnly,
             $parentId,
             $tenantFilter,
@@ -330,6 +344,9 @@ class AccountCategoryController extends BaseController
             $categoryRepository = app(AccountCategoryRepository::class);
             $treeService = app(AccountCategoryTreeService::class);
             $allCategories = $categoryRepository->allOrdered();
+            if ($type !== null) {
+                $allCategories = $allCategories->filter(fn (AccountCategory $category) => strtolower((string) $category->getRawOriginal('type')) === $type)->values();
+            }
             $visibleAccounts = ($includeAccounts || $includeBalance || $hasAccounts || $search !== null)
                 ? app(AccountRepository::class)->visibleOrdered($tenantFilter)
                 : collect();
@@ -423,6 +440,29 @@ class AccountCategoryController extends BaseController
         sort($with);
 
         return $with;
+    }
+
+    protected function allowedCategoryTypes(): array
+    {
+        return AccountCategory::query()
+            ->select('type')
+            ->distinct()
+            ->pluck('type')
+            ->filter(fn ($type) => $type !== null && $type !== '')
+            ->map(fn ($type) => strtolower((string) $type))
+            ->values()
+            ->all();
+    }
+
+    protected function normalizeCategoryType($type): ?string
+    {
+        if ($type === null) {
+            return null;
+        }
+
+        $type = strtolower(trim((string) $type));
+
+        return $type === '' ? null : $type;
     }
 
     protected function filterCategoriesForSearch(Collection $categories, Collection $matchedAccounts, ?string $search, bool $hasAccounts): Collection

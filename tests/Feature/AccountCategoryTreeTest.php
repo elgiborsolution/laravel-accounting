@@ -119,6 +119,80 @@ class AccountCategoryTreeTest extends TestCase
         $this->assertSame($child->id, $data->first()['id']);
     }
 
+    public function test_account_categories_index_can_filter_by_type(): void
+    {
+        $asset = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'TYPE_FILTER_ASSET',
+            'category_name' => 'Type Filter Asset',
+            'report_type' => 'BS',
+            'sequence_no' => 5,
+            'status' => true,
+        ]);
+
+        AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'REVENUE',
+            'category_code' => 'TYPE_FILTER_REVENUE',
+            'category_name' => 'Type Filter Revenue',
+            'report_type' => 'PL',
+            'sequence_no' => 6,
+            'status' => true,
+        ]);
+
+        $response = $this->getJson('/api/accounting/categories?type=asset');
+
+        $response->assertOk();
+
+        $data = collect($response->json('data'));
+
+        $this->assertNotNull($data->firstWhere('id', $asset->id));
+        $this->assertTrue($data->every(fn (array $item) => $item['type'] === 'ASSET'));
+    }
+
+    public function test_account_categories_index_type_filter_is_case_insensitive(): void
+    {
+        $asset = AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'ASSET',
+            'category_code' => 'TYPE_FILTER_CASE_ASSET',
+            'category_name' => 'Type Filter Case Asset',
+            'report_type' => 'BS',
+            'sequence_no' => 7,
+            'status' => true,
+        ]);
+
+        AccountCategory::create([
+            'parent_id' => null,
+            'type' => 'EXPENSE',
+            'category_code' => 'TYPE_FILTER_CASE_EXPENSE',
+            'category_name' => 'Type Filter Case Expense',
+            'report_type' => 'PL',
+            'sequence_no' => 8,
+            'status' => true,
+        ]);
+
+        foreach (['ASSET', 'asset', 'Asset', 'AsSeT'] as $type) {
+            $response = $this->getJson('/api/accounting/categories?type='.$type);
+
+            $response->assertOk();
+
+            $data = collect($response->json('data'));
+
+            $this->assertNotNull($data->firstWhere('id', $asset->id));
+            $this->assertTrue($data->every(fn (array $item) => $item['type'] === 'ASSET'));
+        }
+    }
+
+    public function test_account_categories_index_rejects_invalid_type_filter(): void
+    {
+        $response = $this->getJson('/api/accounting/categories?type=not-a-real-type');
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['type']);
+    }
+
     public function test_account_categories_index_can_return_root_only_tree(): void
     {
         $parent = AccountCategory::create([

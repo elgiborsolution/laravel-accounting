@@ -283,6 +283,9 @@ Query parameters:
 - When provided, only child categories with `parent_id = {id}` are returned.
 - The category with `id = {id}` itself is excluded.
 - If `parent_id` is present, it takes precedence over `root_only`.
+- `type` `string` optional
+- When provided, only categories whose stored `type` matches the requested value are returned.
+- The value is validated against the distinct category types currently present in `acc_account_categories`.
 - `has_accounts` `boolean` optional
 - When `true`, only category branches that contain visible accounts are returned.
 - A category remains when it has direct accounts or descendant categories with direct accounts.
@@ -328,6 +331,11 @@ Example request:
 
 ```bash
 curl --location 'http://127.0.0.1:8000/api/accounting/categories?root_only=true&with=children,accounts' \
+--header 'Accept: application/json'
+```
+
+```bash
+curl --location 'http://127.0.0.1:8000/api/accounting/categories?type=asset' \
 --header 'Accept: application/json'
 ```
 
@@ -445,7 +453,8 @@ Notes:
 - Category balance is calculated recursively from direct child accounts and descendant categories.
 - `search` prunes category branches in memory after categories and visible accounts are loaded once.
 - `has_accounts=true` prunes category branches in memory without recursive database queries.
-- Cache keys are parameter-aware, so `root_only`, `parent_id`, `search`, `has_accounts`, and `with` combinations are cached separately.
+- `type` applies before search and branch pruning so all later filters operate only on the selected category type.
+- Cache keys are parameter-aware, so `root_only`, `parent_id`, `type`, `search`, `has_accounts`, and `with` combinations are cached separately.
 
 ### POST `/api/accounting/categories`
 
