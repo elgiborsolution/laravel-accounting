@@ -136,7 +136,7 @@ class JournalService
                 'source_id' => $data['source_id'] ?? null,
                 'reference_no' => $data['reference_no'] ?? null,
                 'description' => $data['description'] ?? null,
-                'amount' => round($totalDebit, 2),
+                'amount' => $this->calculateJournalAmount($totalDebit, $totalCredit),
                 'status' => JournalStatus::DRAFT,
             ]);
 
@@ -329,7 +329,7 @@ class JournalService
             'source_id' => $data['source_id'] ?? null,
             'reference_no' => $referenceNo !== '' ? $referenceNo : $journalNo,
             'description' => $data['description'] ?? null,
-            'amount' => round($totalDebit, 2),
+            'amount' => $this->calculateJournalAmount($totalDebit, $totalCredit),
             'status' => JournalStatus::POSTED,
             'posted_at' => now(),
             'posted_by' => auth()->id() ?? null,
@@ -368,7 +368,10 @@ class JournalService
                 'source_id' => $journal->source_id,
                 'reference_no' => $journal->reference_no,
                 'description' => $this->buildReversalDescription($journal, $reason),
-                'amount' => round((float) ($journal->amount ?? $journal->getRelation('details')->sum('debit')), 2),
+                'amount' => $this->calculateJournalAmount(
+                    (float) ($journal->amount ?? $journal->getRelation('details')->sum('debit')),
+                    (float) ($journal->amount ?? $journal->getRelation('details')->sum('credit'))
+                ),
                 'status' => JournalStatus::POSTED,
                 'posted_at' => $trxDate,
                 'posted_by' => auth()->id() ?? null,
@@ -522,6 +525,11 @@ class JournalService
         $seqStr = str_pad($seq, 4, '0', STR_PAD_LEFT);
 
         return str_replace(['{YEAR}', '{MONTH}', '{SEQ}'], [$year, $month, $seqStr], $format);
+    }
+
+    protected function calculateJournalAmount(float|int $totalDebit, float|int $totalCredit): float
+    {
+        return round(max((float) $totalDebit, (float) $totalCredit), 2);
     }
 
     protected function normalizeServiceCode(string|AccountingServiceCode $serviceCode): string

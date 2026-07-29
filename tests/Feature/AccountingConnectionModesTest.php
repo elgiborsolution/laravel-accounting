@@ -13,6 +13,7 @@ use ESolution\LaravelAccounting\Models\Service;
 use ESolution\LaravelAccounting\Models\ServiceAccount;
 use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceRepository;
+use ESolution\LaravelAccounting\Services\JournalService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
@@ -169,6 +170,101 @@ class AccountingConnectionModesTest extends TestCase
         $journal = app(JournalRepository::class)->attachViewRelations($journal);
         $this->assertSame('1000', $journal->details->first()->account->code);
         $this->assertSame('CASH_CASH_EQUIVALENT', AccountCategory::where('id', $journal->details->first()->account->category_id)->value('category_code'));
+    }
+
+    public function test_journal_by_mapping_sets_amount_to_total_debit_in_single_database_mode(): void
+    {
+        $this->useSingleDatabaseMode('single');
+        $this->createAllAccountingTables('single');
+
+        $cashCategory = AccountCategory::create([
+            'type' => 'ASSET',
+            'category_code' => 'MAPPING_AMOUNT_ASSET',
+            'category_name' => 'Mapping Amount Asset',
+            'report_type' => 'BS',
+            'sequence_no' => 1,
+            'status' => true,
+        ]);
+
+        $equityCategory = AccountCategory::create([
+            'type' => 'EQUITY',
+            'category_code' => 'MAPPING_AMOUNT_EQUITY',
+            'category_name' => 'Mapping Amount Equity',
+            'report_type' => 'BS',
+            'sequence_no' => 2,
+            'status' => true,
+        ]);
+
+        $debitAccount = Account::create([
+            'category_id' => $cashCategory->id,
+            'code' => '1100',
+            'name' => 'Cash Mapping Amount',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $creditAccount = Account::create([
+            'category_id' => $equityCategory->id,
+            'code' => '3100',
+            'name' => 'Equity Mapping Amount',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $service = Service::create([
+            'service_code' => 'MAPPING_AMOUNT',
+            'service_name' => 'Mapping Amount',
+            'module_name' => 'TEST',
+            'description' => null,
+            'is_active' => true,
+        ]);
+
+        ServiceAccount::create([
+            'service_id' => $service->id,
+            'mapping_key' => 'mapping_amount_debit',
+            'mapping_name' => 'Mapping Amount Debit',
+            'position' => 'D',
+            'account_id' => $debitAccount->id,
+            'sequence_no' => 1,
+            'is_dynamic' => false,
+            'is_required' => true,
+            'status' => true,
+        ]);
+
+        ServiceAccount::create([
+            'service_id' => $service->id,
+            'mapping_key' => 'mapping_amount_credit',
+            'mapping_name' => 'Mapping Amount Credit',
+            'position' => 'K',
+            'account_id' => $creditAccount->id,
+            'sequence_no' => 2,
+            'is_dynamic' => false,
+            'is_required' => true,
+            'status' => true,
+        ]);
+
+        $journal = app(JournalService::class)->journalByMapping([
+            'service_code' => 'MAPPING_AMOUNT',
+            'trx_date' => '2026-07-13',
+            'reference_no' => 'MAP-20260713-0001',
+            'description' => 'Mapping journal amount test',
+            'items' => [
+                [
+                    'mapping_key' => 'mapping_amount_debit',
+                    'amount' => 1000000,
+                ],
+                [
+                    'mapping_key' => 'mapping_amount_credit',
+                    'amount' => 1000000,
+                ],
+            ],
+        ]);
+
+        $this->assertSame(1000000.0, (float) $journal->fresh()->amount);
+        $this->assertDatabaseHas('acc_journal_entries', [
+            'id' => $journal->id,
+            'amount' => 1000000,
+        ], 'single');
     }
 
     public function test_categories_endpoint_can_include_account_and_category_balances_in_shared_master_mode(): void
