@@ -83,6 +83,65 @@ class ManualJournalControllerTest extends TestCase
         ], 'single');
     }
 
+    public function test_it_stores_integer_posted_by_on_manual_journal(): void
+    {
+        $this->useSingleDatabaseMode('single');
+        $this->createAllAccountingTables('single');
+
+        [$debitAccount, $creditAccount] = $this->seedPostingAccounts('single');
+
+        $response = $this->postJson('/api/accounting/journals', [
+            'trx_date' => '2026-07-13',
+            'posted_by' => 15,
+            'details' => [
+                [
+                    'account_id' => $debitAccount->id,
+                    'type' => 'D',
+                    'amount' => 1000000,
+                ],
+                [
+                    'account_id' => $creditAccount->id,
+                    'type' => 'K',
+                    'amount' => 1000000,
+                ],
+            ],
+        ]);
+
+        $response->assertCreated();
+
+        $this->assertSame('15', (string) JournalEntry::query()->findOrFail($response->json('data.id'))->posted_by);
+    }
+
+    public function test_it_stores_uuid_posted_by_on_manual_journal(): void
+    {
+        $this->useSingleDatabaseMode('single');
+        $this->createAllAccountingTables('single');
+
+        [$debitAccount, $creditAccount] = $this->seedPostingAccounts('single');
+        $postedBy = '5f4d5c8d-1b4b-4e9d-9b5d-5b2d4c2f9c11';
+
+        $response = $this->postJson('/api/accounting/journals', [
+            'trx_date' => '2026-07-13',
+            'posted_by' => $postedBy,
+            'details' => [
+                [
+                    'account_id' => $debitAccount->id,
+                    'type' => 'D',
+                    'amount' => 1000000,
+                ],
+                [
+                    'account_id' => $creditAccount->id,
+                    'type' => 'K',
+                    'amount' => 1000000,
+                ],
+            ],
+        ]);
+
+        $response->assertCreated();
+
+        $this->assertSame($postedBy, JournalEntry::query()->findOrFail($response->json('data.id'))->posted_by);
+    }
+
     public function test_it_rejects_unbalanced_manual_journals(): void
     {
         $this->useSingleDatabaseMode('single');
@@ -442,7 +501,7 @@ class ManualJournalControllerTest extends TestCase
             $table->text('description')->nullable();
             $table->decimal('amount', 18, 2)->default(0);
             $table->string('status', 20)->default('draft');
-            $table->uuid('posted_by')->nullable();
+            $table->string('posted_by', 100)->nullable();
             $table->timestamp('posted_at')->nullable();
             $table->uuid('reversal_of_id')->nullable();
             $table->text('reversal_reason')->nullable();

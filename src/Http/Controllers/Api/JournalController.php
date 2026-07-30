@@ -23,6 +23,11 @@ class JournalController extends BaseController
             'trx_date' => 'required|date',
             'reference_no' => 'nullable|string|max:100',
             'description' => 'nullable|string',
+            'posted_by' => ['nullable', function ($attribute, $value, $fail) {
+                if (! is_int($value) && ! is_string($value)) {
+                    $fail('The '.$attribute.' must be an integer or string.');
+                }
+            }],
             'details' => 'required|array|min:2',
             'details.*.account_id' => ['required', Rule::exists(Account::validationTable(), 'id')],
             'details.*.type' => 'required|in:D,K',
@@ -49,6 +54,11 @@ class JournalController extends BaseController
             'trx_date' => 'required|date',
             'reference_no' => 'nullable|string|max:100',
             'description' => 'nullable|string',
+            'posted_by' => ['nullable', function ($attribute, $value, $fail) {
+                if (! is_int($value) && ! is_string($value)) {
+                    $fail('The '.$attribute.' must be an integer or string.');
+                }
+            }],
             'details' => 'required|array|min:2',
             'details.*.account_id' => ['required', Rule::exists(Account::validationTable(), 'id')],
             'details.*.amount' => 'required|numeric|not_in:0',
@@ -137,9 +147,14 @@ class JournalController extends BaseController
 
         $validated = $request->validate([
             'reason' => 'required|string|max:1000',
+            'posted_by' => ['nullable', function ($attribute, $value, $fail) {
+                if (! is_int($value) && ! is_string($value)) {
+                    $fail('The '.$attribute.' must be an integer or string.');
+                }
+            }],
         ]);
 
-        $reversal = app(JournalService::class)->reverse($id, $validated['reason']);
+        $reversal = app(JournalService::class)->reverse($id, $validated['reason'], $validated['posted_by'] ?? null);
 
         return $this->successResponse('Journal reversed successfully', [
             'original_journal_id' => $id,

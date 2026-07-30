@@ -26,6 +26,14 @@ All account examples below refer to leaf posting accounts. Hierarchy belongs to 
 
 In shared master mode, `JournalService::journalByMapping()` resolves the service and mapping rows from the configured master connection instead of the tenant database.
 
+Common journal payload fields:
+
+- `posted_by` is optional on every journal creation payload.
+- `posted_by` may be an integer or a string such as a UUID.
+- `posted_by` is stored directly in `acc_journal_entries.posted_by`.
+- The package does not validate `posted_by` against any users table.
+- If `posted_by` is omitted, the journal stores `NULL`.
+
 ## SALES
 
 ### `SALES_CASH`
@@ -49,6 +57,7 @@ In shared master mode, `JournalService::journalByMapping()` resolves the service
 app(\ESolution\LaravelAccounting\Services\JournalService::class)->journalByMapping([
     'service_code' => 'SALES_CASH',
     'trx_date' => '2026-01-15',
+    'posted_by' => 15,
     'items' => [
         ['mapping_key' => 'sales_cash_cash_d', 'amount' => 100000],
         ['mapping_key' => 'sales_cash_sales_k', 'amount' => 100000],

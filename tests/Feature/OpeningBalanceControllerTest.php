@@ -88,6 +88,39 @@ class OpeningBalanceControllerTest extends TestCase
         ], 'single');
     }
 
+    public function test_it_stores_posted_by_on_opening_balance_journal(): void
+    {
+        $this->useSingleDatabaseMode('single');
+        $this->createAllAccountingTables('single');
+
+        [$assetAccount, $liabilityAccount, $equityAccount] = $this->seedOpeningBalanceAccounts('single');
+        $postedBy = '5f4d5c8d-1b4b-4e9d-9b5d-5b2d4c2f9c11';
+
+        $response = $this->postJson('/api/accounting/opening-balances', [
+            'trx_date' => '2026-01-01',
+            'reference_no' => 'OPENING-2026',
+            'posted_by' => $postedBy,
+            'details' => [
+                [
+                    'account_id' => $assetAccount->id,
+                    'amount' => 1000000,
+                ],
+                [
+                    'account_id' => $liabilityAccount->id,
+                    'amount' => -500000,
+                ],
+                [
+                    'account_id' => $equityAccount->id,
+                    'amount' => 1500000,
+                ],
+            ],
+        ]);
+
+        $response->assertCreated();
+
+        $this->assertSame($postedBy, (string) DB::connection('single')->table('acc_journal_entries')->where('id', $response->json('data.id'))->value('posted_by'));
+    }
+
     public function test_it_rejects_unbalanced_opening_balance(): void
     {
         $this->useSingleDatabaseMode('single');
@@ -515,7 +548,7 @@ class OpeningBalanceControllerTest extends TestCase
             $table->text('description')->nullable();
             $table->decimal('amount', 18, 2)->default(0);
             $table->string('status', 20)->default('draft');
-            $table->uuid('posted_by')->nullable();
+            $table->string('posted_by', 100)->nullable();
             $table->timestamp('posted_at')->nullable();
             $table->uuid('reversal_of_id')->nullable();
             $table->text('reversal_reason')->nullable();

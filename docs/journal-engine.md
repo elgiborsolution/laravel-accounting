@@ -30,6 +30,12 @@ Draft journals are created by:
 - writes `posted_at`
 - writes `posted_by`
 
+`posted_by` is optional across journal creation and posting flows:
+
+- accepts integer or string values such as UUIDs
+- is stored directly without checking any users table
+- defaults to `NULL` when omitted
+
 If the journal is already posted, the method returns it without creating duplicate state.
 
 ## Reverse Journal
@@ -90,6 +96,7 @@ It:
 - writes the journal header
 - writes detail rows
 - posts the journal immediately
+- stores optional `posted_by` consistently through the centralized journal creation path
 
 ## Opening Balance Journal
 
@@ -105,6 +112,7 @@ It:
 - creates exactly one posted journal
 - stores the total journal amount in `acc_journal_entries.amount`
 - calls `JournalService::journalManual()` internally so the package keeps a single journal creation path
+- supports optional `posted_by` with the same behavior as other journal creation flows
 
 Copyable example payload:
 

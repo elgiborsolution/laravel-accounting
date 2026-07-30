@@ -105,8 +105,31 @@ Behavior notes:
 - `journalByMapping()` is safe for shared master database setups because it does not depend on cross-connection `whereHas()` or eager loading against master tables.
 - `journalManual()` creates a balanced manual journal from arbitrary accounts, validates account state and fiscal period, and posts it immediately.
 - `journalOpeningBalance()` creates one posted journal for opening balances, derives debit/credit placement from account category normal balance, and rejects duplicate opening-balance creation.
+- All journal creation paths accept optional `posted_by` as either integer or string and store it directly without checking any users table.
 - `reverse()` creates a brand-new reversal journal and does not edit the original posted journal.
 - `post()` is idempotent for already-posted journals.
+
+Payload notes:
+
+- `journalManual(array $data)`
+  - `trx_date` required
+  - `reference_no` optional
+  - `description` optional
+  - `posted_by` optional `int|string`
+  - `details` required
+- `journalOpeningBalance(array $data)`
+  - `trx_date` required
+  - `reference_no` optional
+  - `description` optional
+  - `posted_by` optional `int|string`
+  - `details` required
+- `journalByMapping(array $data)`
+  - `service_code` required
+  - `trx_date` optional
+  - `reference_no` optional
+  - `description` optional
+  - `posted_by` optional `int|string`
+  - `items` required
 
 ### `CoaService`
 
@@ -1235,6 +1258,7 @@ Request body:
   "trx_date": "2026-07-13",
   "reference_no": "JU-20260713-0001",
   "description": "Jurnal penyesuaian akhir bulan",
+  "posted_by": 15,
   "details": [
     {
       "account_id": "uuid-account-1",
@@ -1257,6 +1281,7 @@ Validation rules:
 - `trx_date` required|date
 - `reference_no` nullable|string|max:100
 - `description` nullable|string
+- `posted_by` nullable and may be either integer or string
 - `details` required|array|min:2
 - `details.*.account_id` required and must exist in `acc_accounts`
 - `details.*.type` required|in:D,K
@@ -1266,6 +1291,7 @@ Validation rules:
 - Account must be active
 - Account must be postable
 - Fiscal period must be open
+- `posted_by` is stored as provided and is not validated against any users table
 
 Success response:
 
@@ -1312,6 +1338,7 @@ curl --location 'http://127.0.0.1:8000/api/accounting/journals' \
   "trx_date": "2026-07-13",
   "reference_no": "JU-20260713-0001",
   "description": "Jurnal penyesuaian akhir bulan",
+  "posted_by": "5f4d5c8d-1b4b-4e9d-9b5d-5b2d4c2f9c11",
   "details": [
     {
       "account_id": "uuid-account-1",
@@ -1342,6 +1369,7 @@ Request body:
   "trx_date": "2026-01-01",
   "reference_no": "OPENING-2026",
   "description": "Opening Balance Tahun 2026",
+  "posted_by": 15,
   "details": [
     {
       "account_id": "uuid-account-1",
@@ -1364,6 +1392,7 @@ Validation rules:
 - `trx_date` required|date
 - `reference_no` nullable|string|max:100
 - `description` nullable|string
+- `posted_by` nullable and may be either integer or string
 - `details` required|array|min:2
 - `details.*.account_id` required and must exist in `acc_accounts`
 - `details.*.amount` required|numeric|not_in:0
@@ -1373,6 +1402,7 @@ Validation rules:
 - Fiscal period must be open
 - The total debit must equal the total credit after the package maps signed amounts using the account category normal balance
 - Opening balance can only be created once per database or tenant because the package checks `source_type = OPENING_BALANCE`
+- `posted_by` is stored exactly as provided and is not validated against any users table
 
 Success response:
 
@@ -1398,6 +1428,7 @@ Copyable example payload:
   "trx_date": "2026-01-01",
   "reference_no": "OPENING-2026",
   "description": "Opening Balance Tahun 2026",
+  "posted_by": "5f4d5c8d-1b4b-4e9d-9b5d-5b2d4c2f9c11",
   "details": [
     {
       "account_id": "uuid-account-1",
@@ -1749,4 +1780,3 @@ Example response:
 - Categories, accounts, and services are master-data endpoints.
 - Journals and fiscal-period/balance logic are transaction-data endpoints and follow the application's active connection.
 - Route model binding is not used for these endpoints; the controllers read `id` manually and resolve tenant context through the `tenantId` route segment or `X-Tenant` header when present.
-

@@ -267,6 +267,98 @@ class AccountingConnectionModesTest extends TestCase
         ], 'single');
     }
 
+    public function test_journal_by_mapping_can_store_custom_posted_by(): void
+    {
+        $this->useSingleDatabaseMode('single');
+        $this->createAllAccountingTables('single');
+
+        $assetCategory = AccountCategory::create([
+            'type' => 'ASSET',
+            'category_code' => 'MAPPING_POSTED_BY_ASSET',
+            'category_name' => 'Mapping Posted By Asset',
+            'report_type' => 'BS',
+            'sequence_no' => 1,
+            'status' => true,
+        ]);
+
+        $equityCategory = AccountCategory::create([
+            'type' => 'EQUITY',
+            'category_code' => 'MAPPING_POSTED_BY_EQUITY',
+            'category_name' => 'Mapping Posted By Equity',
+            'report_type' => 'BS',
+            'sequence_no' => 2,
+            'status' => true,
+        ]);
+
+        $debitAccount = Account::create([
+            'category_id' => $assetCategory->id,
+            'code' => '3110',
+            'name' => 'Mapping Posted By Debit',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $creditAccount = Account::create([
+            'category_id' => $equityCategory->id,
+            'code' => '3111',
+            'name' => 'Mapping Posted By Credit',
+            'is_postable' => true,
+            'status' => true,
+        ]);
+
+        $service = Service::create([
+            'service_code' => 'MAPPING_POSTED_BY',
+            'service_name' => 'Mapping Posted By',
+            'module_name' => 'TEST',
+            'description' => null,
+            'is_active' => true,
+        ]);
+
+        ServiceAccount::create([
+            'service_id' => $service->id,
+            'mapping_key' => 'mapping_posted_by_debit',
+            'mapping_name' => 'Mapping Posted By Debit',
+            'position' => 'D',
+            'account_id' => $debitAccount->id,
+            'sequence_no' => 1,
+            'is_dynamic' => false,
+            'is_required' => true,
+            'status' => true,
+        ]);
+
+        ServiceAccount::create([
+            'service_id' => $service->id,
+            'mapping_key' => 'mapping_posted_by_credit',
+            'mapping_name' => 'Mapping Posted By Credit',
+            'position' => 'K',
+            'account_id' => $creditAccount->id,
+            'sequence_no' => 2,
+            'is_dynamic' => false,
+            'is_required' => true,
+            'status' => true,
+        ]);
+
+        $journal = app(JournalService::class)->journalByMapping([
+            'service_code' => 'MAPPING_POSTED_BY',
+            'trx_date' => '2026-07-13',
+            'reference_no' => 'MAP-POSTED-BY-0001',
+            'description' => 'Mapping journal posted by test',
+            'posted_by' => 15,
+            'items' => [
+                [
+                    'mapping_key' => 'mapping_posted_by_debit',
+                    'amount' => 500000,
+                ],
+                [
+                    'mapping_key' => 'mapping_posted_by_credit',
+                    'amount' => 500000,
+                ],
+            ],
+        ]);
+
+        $this->assertSame('15', (string) $journal->fresh()->posted_by);
+    }
+
     public function test_categories_endpoint_can_include_account_and_category_balances_in_shared_master_mode(): void
     {
         $this->useTenantWithSharedMasterMode();
@@ -852,7 +944,7 @@ class AccountingConnectionModesTest extends TestCase
             $table->text('description')->nullable();
             $table->decimal('amount', 18, 2)->default(0);
             $table->string('status', 20)->default('draft');
-            $table->uuid('posted_by')->nullable();
+            $table->string('posted_by', 100)->nullable();
             $table->timestamp('posted_at')->nullable();
             $table->uuid('reversal_of_id')->nullable();
             $table->text('reversal_reason')->nullable();

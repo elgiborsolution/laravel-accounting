@@ -22,7 +22,7 @@ return new class extends Migration
             $blueprint->text('description')->nullable();
             $blueprint->decimal('amount', 18, 2)->default(0);
             $blueprint->enum('status', ['draft', 'posted', 'reversed'])->default('draft');
-            $blueprint->uuid('posted_by')->nullable();
+            $blueprint->string('posted_by', 100)->nullable();
             $blueprint->datetime('posted_at')->nullable();
             $blueprint->timestamps();
 

@@ -207,6 +207,18 @@ $salesServices = Accounting::catalog()->sales();
 
 [`JournalService::journalManual()`](./src/Services/JournalService.php) accepts balanced debit/credit lines, validates account state and fiscal period, and creates a posted journal entry with details.
 
+Payload shape:
+
+- `trx_date` required `date|string`
+- `reference_no` optional `string`
+- `description` optional `string`
+- `posted_by` optional `int|string`
+- `details` required `array`
+- `details.*.account_id` or `details.*.account_code` required
+- `details.*.type` required `D|K`
+- `details.*.amount` required numeric `> 0`
+- `details.*.description` optional `string`
+
 ```php
 use ESolution\LaravelAccounting\Services\JournalService;
 
@@ -214,6 +226,7 @@ $journal = app(JournalService::class)->journalManual([
     'trx_date' => '2026-01-15',
     'reference_no' => 'JU-20260115-0001',
     'description' => 'Office expense payment',
+    'posted_by' => 15,
     'details' => [
         [
             'account_id' => 'uuid-account-1',
@@ -231,9 +244,22 @@ $journal = app(JournalService::class)->journalManual([
 ]);
 ```
 
+`posted_by` is optional for every journal creation path. It may be an integer or string UUID, is stored as-is in `journal_entries.posted_by`, is not validated against any users table, and defaults to `NULL` when omitted.
+
 ### Create an opening balance journal
 
 [`JournalService::journalOpeningBalance()`](./src/Services/JournalService.php) creates one posted journal for opening balances across multiple accounts. The package determines debit/credit placement from each account category type and stores the total journal amount in the journal header.
+
+Payload shape:
+
+- `trx_date` required `date|string`
+- `reference_no` optional `string`
+- `description` optional `string`
+- `posted_by` optional `int|string`
+- `details` required `array`
+- `details.*.account_id` required
+- `details.*.amount` required numeric and cannot be `0`
+- `details.*.description` optional `string`
 
 Copyable JSON payload:
 
@@ -242,6 +268,7 @@ Copyable JSON payload:
   "trx_date": "2026-01-01",
   "reference_no": "OPENING-2026",
   "description": "Opening Balance Tahun 2026",
+  "posted_by": "5f4d5c8d-1b4b-4e9d-9b5d-5b2d4c2f9c11",
   "details": [
     {
       "account_id": "uuid-1",
@@ -284,6 +311,21 @@ Example:
 
 [`JournalService::journalByMapping()`](./src/Services/JournalService.php) resolves the service and its mappings through repositories, validates `service_code`, checks mapping keys, and can auto-post when enabled in configuration. The method does not rely on cross-connection eager loading or `whereHas()` against master tables.
 
+Payload shape:
+
+- `service_code` required `string|AccountingServiceCode`
+- `trx_date` optional `date|string`
+- `reference_no` optional `string`
+- `description` optional `string`
+- `posted_by` optional `int|string`
+- `source_type` optional `string`
+- `source_id` optional scalar
+- `items` required `array`
+- `items.*.mapping_key` required `string`
+- `items.*.amount` required numeric
+- `items.*.account_id` optional for dynamic mappings
+- `items.*.description` optional `string`
+
 ```php
 use ESolution\LaravelAccounting\Enums\AccountingServiceCode;
 use ESolution\LaravelAccounting\Services\JournalService;
@@ -293,6 +335,7 @@ $journal = app(JournalService::class)->journalByMapping([
     'trx_date' => '2026-01-15',
     'reference_no' => 'INV-0001',
     'description' => 'Sales invoice INV-0001',
+    'posted_by' => '5f4d5c8d-1b4b-4e9d-9b5d-5b2d4c2f9c11',
     'items' => [
         [
             'mapping_key' => 'cash_debit',

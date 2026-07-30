@@ -128,7 +128,7 @@ class JournalService
                 throw new Exception("Journal is not balanced. Total Debit: $totalDebit, Total Credit: $totalCredit");
             }
 
-            $journal = JournalEntry::create([
+            $journal = $this->createJournalEntry([
                 'journal_no' => $this->generateJournalNo($trxDate),
                 'trx_date' => $trxDate,
                 'service_id' => $service->id,
@@ -138,14 +138,10 @@ class JournalService
                 'description' => $data['description'] ?? null,
                 'amount' => $this->calculateJournalAmount($totalDebit, $totalCredit),
                 'status' => JournalStatus::DRAFT,
-            ]);
-
-            foreach ($details as $detail) {
-                JournalEntryDetail::create($detail + ['journal_entry_id' => $journal->id]);
-            }
+            ], $details);
 
             if (config('accounting.journal.auto_post', true)) {
-                $this->post($journal->id);
+                $this->post($journal->id, $data['posted_by'] ?? null);
             }
 
             $this->clearCache();
@@ -210,6 +206,7 @@ class JournalService
                 'trx_date' => $trxDate,
                 'reference_no' => $data['reference_no'] ?? null,
                 'description' => $data['description'] ?? null,
+                'posted_by' => $data['posted_by'] ?? null,
                 'source_type' => 'OPENING_BALANCE',
                 'source_id' => null,
                 'details' => $normalized['details'],
@@ -321,7 +318,7 @@ class JournalService
         $journalNo = $this->generateJournalNo($trxDate);
         $referenceNo = trim((string) ($data['reference_no'] ?? ''));
 
-        $journal = JournalEntry::create([
+        $journal = $this->createJournalEntry([
             'journal_no' => $journalNo,
             'trx_date' => $trxDate,
             'service_id' => null,
@@ -332,12 +329,8 @@ class JournalService
             'amount' => $this->calculateJournalAmount($totalDebit, $totalCredit),
             'status' => JournalStatus::POSTED,
             'posted_at' => now(),
-            'posted_by' => auth()->id() ?? null,
-        ]);
-
-        foreach ($journalDetails as $detail) {
-            JournalEntryDetail::create($detail + ['journal_entry_id' => $journal->id]);
-        }
+            'posted_by' => $this->normalizePostedBy($data['posted_by'] ?? null),
+        ], $journalDetails);
 
         $this->clearCache();
 
@@ -347,9 +340,9 @@ class JournalService
     /**
      * Reverse a posted journal entry by creating a new reversing journal.
      */
-    public function reverse($journalId, string $reason)
+    public function reverse($journalId, string $reason, int|string|null $postedBy = null)
     {
-        return DB::connection($this->transactionConnection())->transaction(function () use ($journalId, $reason) {
+        return DB::connection($this->transactionConnection())->transaction(function () use ($journalId, $reason, $postedBy) {
             $journal = $this->journals->findWithDetails($journalId);
 
             if (! $journal) {
@@ -360,7 +353,16 @@ class JournalService
 
             $trxDate = now();
 
-            $reversal = JournalEntry::create([
+            $reversalDetails = $journal->getRelation('details')->map(function ($detail) {
+                return [
+                    'account_id' => $detail->account_id,
+                    'debit' => $detail->credit,
+                    'credit' => $detail->debit,
+                    'description' => $detail->description,
+                ];
+            })->all();
+
+            $reversal = $this->createJournalEntry([
                 'journal_no' => $this->generateJournalNo($trxDate),
                 'trx_date' => $trxDate,
                 'service_id' => $journal->service_id,
@@ -374,22 +376,12 @@ class JournalService
                 ),
                 'status' => JournalStatus::POSTED,
                 'posted_at' => $trxDate,
-                'posted_by' => auth()->id() ?? null,
+                'posted_by' => $this->normalizePostedBy($postedBy),
                 'reversal_of_id' => $journal->id,
                 'reversal_reason' => $reason,
                 'reversed_at' => $trxDate,
                 'is_reversal' => true,
-            ]);
-
-            foreach ($journal->getRelation('details') as $detail) {
-                JournalEntryDetail::create([
-                    'journal_entry_id' => $reversal->id,
-                    'account_id' => $detail->account_id,
-                    'debit' => $detail->credit,
-                    'credit' => $detail->debit,
-                    'description' => $detail->description,
-                ]);
-            }
+            ], $reversalDetails);
 
             $this->clearCache();
 
@@ -400,7 +392,7 @@ class JournalService
     /**
      * Post a journal entry.
      */
-    public function post($id)
+    public function post($id, int|string|null $postedBy = null)
     {
         $journal = JournalEntry::findOrFail($id);
 
@@ -415,7 +407,7 @@ class JournalService
         $journal->update([
             'status' => JournalStatus::POSTED,
             'posted_at' => now(),
-            'posted_by' => auth()->id() ?? null,
+            'posted_by' => $this->normalizePostedBy($postedBy),
         ]);
 
         $this->clearCache();
@@ -527,9 +519,31 @@ class JournalService
         return str_replace(['{YEAR}', '{MONTH}', '{SEQ}'], [$year, $month, $seqStr], $format);
     }
 
+    protected function createJournalEntry(array $attributes, array $details = []): JournalEntry
+    {
+        $journal = JournalEntry::create($attributes);
+
+        foreach ($details as $detail) {
+            JournalEntryDetail::create($detail + ['journal_entry_id' => $journal->id]);
+        }
+
+        return $journal;
+    }
+
     protected function calculateJournalAmount(float|int $totalDebit, float|int $totalCredit): float
     {
         return round(max((float) $totalDebit, (float) $totalCredit), 2);
+    }
+
+    protected function normalizePostedBy(int|string|null $postedBy): ?string
+    {
+        if ($postedBy === null) {
+            return null;
+        }
+
+        $value = trim((string) $postedBy);
+
+        return $value === '' ? null : $value;
     }
 
     protected function normalizeServiceCode(string|AccountingServiceCode $serviceCode): string
