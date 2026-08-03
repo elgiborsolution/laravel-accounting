@@ -9,6 +9,7 @@ use ESolution\LaravelAccounting\Services\AccountBalanceService;
 use ESolution\LaravelAccounting\Services\AccountOpeningBalanceService;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
+use ESolution\LaravelAccounting\Support\ApiContext;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
@@ -105,7 +106,9 @@ class AccountController extends BaseController
             'status' => 'nullable|boolean',
         ]);
 
-        $account = app(AccountOpeningBalanceService::class)->createAccount($validated);
+        $account = $this->executeMutationHook('accounts.store', $request, $validated, function (ApiContext $context) {
+            return app(AccountOpeningBalanceService::class)->createAccount($context->payload());
+        });
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account created successfully', $account, 201);
@@ -179,7 +182,14 @@ class AccountController extends BaseController
             'status' => 'nullable|boolean',
         ]);
 
-        $account = app(AccountOpeningBalanceService::class)->updateAccount($account, $validated);
+        $account = $this->executeMutationHook('accounts.update', $request, $validated, function (ApiContext $context) {
+            /** @var Account $account */
+            $account = $context->get('account');
+
+            return app(AccountOpeningBalanceService::class)->updateAccount($account, $context->payload());
+        }, [
+            'account' => $account,
+        ]);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account updated successfully', $account);
@@ -199,7 +209,15 @@ class AccountController extends BaseController
             abort(404);
         }
 
-        $account->delete();
+        $this->executeMutationHook('accounts.destroy', $request, [], function (ApiContext $context) {
+            /** @var Account $account */
+            $account = $context->get('account');
+            $account->delete();
+
+            return null;
+        }, [
+            'account' => $account,
+        ]);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account deleted successfully');
@@ -218,8 +236,18 @@ class AccountController extends BaseController
         if (! $account) {
             abort(404);
         }
-        $account->status = ! $account->status;
-        $account->save();
+        $account = $this->executeMutationHook('accounts.toggle-status', $request, [
+            'status' => ! $account->status,
+        ], function (ApiContext $context) {
+            /** @var Account $account */
+            $account = $context->get('account');
+            $account->status = (bool) ($context->payload()['status'] ?? ! $account->status);
+            $account->save();
+
+            return $account;
+        }, [
+            'account' => $account,
+        ]);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account status toggled successfully', $account);

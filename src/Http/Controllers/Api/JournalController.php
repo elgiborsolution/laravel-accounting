@@ -7,6 +7,7 @@ use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use ESolution\LaravelAccounting\Services\JournalService;
+use ESolution\LaravelAccounting\Support\ApiContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
@@ -35,7 +36,9 @@ class JournalController extends BaseController
             'details.*.description' => 'nullable|string',
         ]);
 
-        $journal = app(JournalService::class)->journalManual($validated);
+        $journal = $this->executeMutationHook('journals.store', $request, $validated, function (ApiContext $context) {
+            return app(JournalService::class)->journalManual($context->payload());
+        });
 
         return $this->successResponse('Manual journal created successfully', [
             'id' => $journal->id,
@@ -65,7 +68,9 @@ class JournalController extends BaseController
             'details.*.description' => 'nullable|string',
         ]);
 
-        $journal = app(JournalService::class)->journalOpeningBalance($validated);
+        $journal = $this->executeMutationHook('opening-balances.store', $request, $validated, function (ApiContext $context) {
+            return app(JournalService::class)->journalOpeningBalance($context->payload());
+        });
 
         return $this->successResponse('Opening balance created successfully', [
             'id' => $journal->id,
@@ -154,7 +159,13 @@ class JournalController extends BaseController
             }],
         ]);
 
-        $reversal = app(JournalService::class)->reverse($id, $validated['reason'], $validated['posted_by'] ?? null);
+        $reversal = $this->executeMutationHook('journals.reverse', $request, $validated, function (ApiContext $context) use ($id) {
+            $payload = $context->payload();
+
+            return app(JournalService::class)->reverse($id, $payload['reason'], $payload['posted_by'] ?? null);
+        }, [
+            'journal_entry_id' => $id,
+        ]);
 
         return $this->successResponse('Journal reversed successfully', [
             'original_journal_id' => $id,

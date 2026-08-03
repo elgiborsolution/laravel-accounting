@@ -2,6 +2,8 @@
 
 namespace ESolution\LaravelAccounting\Http\Controllers;
 
+use ESolution\LaravelAccounting\Support\AccountingHookManager;
+use ESolution\LaravelAccounting\Support\ApiContext;
 use ESolution\LaravelAccounting\Traits\ApiResponse;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
@@ -135,6 +137,28 @@ abstract class BaseController extends Controller
         }
 
         return $tags;
+    }
+
+    protected function executeMutationHook(
+        string $action,
+        Request $request,
+        array $payload,
+        callable $handler,
+        array $attributes = []
+    ): mixed {
+        $method = strtoupper($request->method());
+
+        if (! in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+            return $handler(ApiContext::fromArray($action, array_merge($attributes, [
+                'request' => $request,
+                'payload' => $payload,
+            ])));
+        }
+
+        return app(AccountingHookManager::class)->execute($action, array_merge($attributes, [
+            'request' => $request,
+            'payload' => $payload,
+        ]), $handler);
     }
 
 }

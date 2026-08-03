@@ -11,6 +11,7 @@ class Service extends MasterDataModel
         'service_name',
         'module_name',
         'description',
+        'updated_by',
         'is_active',
         'status',
     ];

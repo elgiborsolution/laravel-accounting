@@ -1,0 +1,37 @@
+<?php
+
+namespace App\Accounting\Hooks;
+
+use ESolution\LaravelAccounting\Contracts\AfterApiHook as AfterApiHookContract;
+use ESolution\LaravelAccounting\Support\ApiContext;
+use Illuminate\Support\Facades\Log;
+
+class AfterApiHook implements AfterApiHookContract
+{
+    /**
+     * Executed after the package successfully processes the request or service call.
+     *
+     * Typical use cases:
+     * - audit log
+     * - activity log
+     * - notification
+     * - synchronization
+     * - cache invalidation
+     * - response enrichment
+     */
+    public function handle(ApiContext $context, mixed $result): mixed
+    {
+        Log::info('Accounting package action finished', [
+            'action' => $context->action(),
+            'tenant_id' => $context->routeParameter('tenantId'),
+            'trace_id' => $context->header('X-Trace-Id'),
+            'user_id' => $context->user()?->getAuthIdentifier(),
+        ]);
+
+        if (is_object($result) && method_exists($result, 'setAttribute')) {
+            $result->setAttribute('hook_processed', true);
+        }
+
+        return $result;
+    }
+}

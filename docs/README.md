@@ -8,6 +8,7 @@ This documentation is the main technical reference for the package. It now uses 
 - [Package Architecture](./architecture.md)
 - [Public API Reference](./reference.md)
 - [Available Services](./services.md)
+- [Hook System](./hooks.md)
 - [Journal Engine](./journal-engine.md)
 - [Account Mapping Engine](./mapping-engine.md)
 - [Extension Guide](./extension-guide.md)
@@ -16,6 +17,8 @@ This documentation is the main technical reference for the package. It now uses 
 
 - Facade: `Accounting`
 - Service classes: `AccountingService`, `JournalService`, `CoaService`, `MappingService`, `ClosingService`, `ReportService`
+- Hook contracts: `BeforeApiHook`, `AfterApiHook`, `AccountingHook`
+- Hook support: `ApiContext`, `AccountingHookManager`
 - Support registries: `ServiceCatalog`, `ServiceAccountTemplateRegistry`
 - Models: `AccountCategory`, `Account`, `Service`, `ServiceAccount`, `JournalEntry`, `JournalEntryDetail`, `FiscalPeriod`, `MonthlyBalance`, `ReportMapping`
 - Enums: `AccountingServiceCode`, `JournalStatus`, `NormalBalance`, `ReportType`
@@ -36,7 +39,6 @@ This documentation is the main technical reference for the package. It now uses 
 
 The package does not currently include:
 
-- Contracts / interfaces
 - Repositories
 - Action classes
 - DTO classes

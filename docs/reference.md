@@ -1093,6 +1093,7 @@ Request body:
 - `service_name` required
 - `module_name` required
 - `description` optional
+- `updated_by` optional and always part of the request contract
 - `status` optional
 - `mappings` optional array
 
@@ -1102,6 +1103,7 @@ Validation rules:
 - `service_name` required string max 200
 - `module_name` required string max 100
 - `description` nullable string
+- `updated_by` nullable and may be either integer or string
 - `status` nullable boolean
 - `mappings` nullable array
 - `mappings.*.mapping_key` required string max 150
@@ -1127,6 +1129,12 @@ Example response:
   }
 }
 ```
+
+Notes:
+
+- `updated_by` is stored directly in `acc_services.updated_by`.
+- The package does not validate `updated_by` against any users table.
+- If `updated_by` is omitted, the stored value remains `NULL`.
 
 ### GET `/api/accounting/services/{id}`
 
@@ -1167,6 +1175,7 @@ Request body:
 - `service_name` optional
 - `module_name` optional
 - `description` optional
+- `updated_by` optional and always part of the request contract
 - `status` optional
 - `mappings` optional array
 
@@ -1176,6 +1185,7 @@ Validation rules:
 - `service_name` nullable string max 200
 - `module_name` nullable string max 100
 - `description` nullable string
+- `updated_by` nullable and may be either integer or string
 - `status` nullable boolean
 - `mappings` nullable array
 - `mappings.*.id` nullable and must exist in the service-account table
@@ -1203,6 +1213,64 @@ Example response:
   }
 }
 ```
+
+Notes:
+
+- When `updated_by` is provided, the package stores it exactly as sent.
+- When `updated_by` is omitted, the package does not auto-generate any fallback value.
+
+## Global Hooks
+
+The package now exposes a reusable hook lifecycle for package services and API-backed workflows:
+
+```text
+beforeHandle()
+  ↓
+Business Logic
+  ↓
+afterHandle()
+```
+
+Default behavior:
+
+- No hook classes are registered by default.
+- The default hook implementation does nothing, so existing behavior remains unchanged.
+
+Configuration:
+
+- `config/accounting.php`
+- `hooks.before` accepts one optional before-hook class.
+- `hooks.after` accepts one optional after-hook class.
+- `before` must implement `ESolution\LaravelAccounting\Contracts\BeforeApiHook`.
+- `after` must implement `ESolution\LaravelAccounting\Contracts\AfterApiHook`.
+
+Hook contract:
+
+- `beforeHandle(string $action, array $context): array`
+- `afterHandle(string $action, mixed $result, array $context): mixed`
+
+Current packaged usage:
+
+- `services.store`
+- `services.update`
+
+Current action to route mapping:
+
+- `services.store` → `POST /api/accounting/services`
+- `services.update` → `PUT /api/accounting/services/{id}`
+
+Hook context:
+
+- `request` when the flow starts from an API endpoint
+- `payload` for validated input data
+- additional objects such as `service` when relevant
+- use `header('X-Tenant')` when hook logic needs the current tenant from the request
+
+Usage notes:
+
+- `beforeHandle()` may validate or rewrite payload values before the business logic runs.
+- `afterHandle()` may modify the returned result or trigger post-processing.
+- Consuming applications can extend hook behavior by registering custom hook classes in configuration or by overriding the hook manager binding in the container.
 
 ### DELETE `/api/accounting/services/{id}`
 

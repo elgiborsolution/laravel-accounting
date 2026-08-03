@@ -1,0 +1,47 @@
+<?php
+
+namespace App\Accounting\Hooks;
+
+use ESolution\LaravelAccounting\Contracts\BeforeApiHook as BeforeApiHookContract;
+use ESolution\LaravelAccounting\Support\ApiContext;
+use Illuminate\Validation\ValidationException;
+
+class BeforeApiHook implements BeforeApiHookContract
+{
+    /**
+     * Executed before the package processes the request or service call.
+     *
+     * Typical use cases:
+     * - inject created_by / updated_by
+     * - tenant validation
+     * - custom authorization
+     * - request normalization
+     * - auditing preparation
+     * - header / route validation
+     *
+     * Throw a validation or business exception here to stop execution.
+     */
+    public function handle(ApiContext $context): void
+    {
+        $payload = $context->payload();
+        $request = $context->request();
+        $user = $context->user();
+        $tenant = $context->routeParameter('tenantId');
+        $traceId = $context->header('X-Trace-Id');
+
+        if ($tenant && ! $traceId) {
+            throw ValidationException::withMessages([
+                'X-Trace-Id' => ['Header X-Trace-Id is required for tenant requests.'],
+            ]);
+        }
+
+        if ($user && ! array_key_exists('updated_by', $payload)) {
+            $payload['updated_by'] = (string) $user->getAuthIdentifier();
+        }
+
+        $payload['hook_trace_id'] = $traceId;
+
+        $context->setPayload($payload);
+        $context->set('host_request_method', $request?->method());
+    }
+}

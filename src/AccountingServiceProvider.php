@@ -20,10 +20,12 @@ use ESolution\LaravelAccounting\Repositories\ServiceAccountRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use ESolution\LaravelAccounting\Support\AccountingExceptionResponder;
+use ESolution\LaravelAccounting\Support\AccountingHookManager;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\ServiceAccountTemplateRegistry;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use ESolution\LaravelAccounting\Http\Middleware\HandleAccountingApiExceptions;
+use ESolution\LaravelAccounting\Services\ServiceManagementService;
 use Illuminate\Support\ServiceProvider;
 
 class AccountingServiceProvider extends ServiceProvider
@@ -49,6 +51,10 @@ class AccountingServiceProvider extends ServiceProvider
 
         $this->app->singleton(AccountingExceptionResponder::class, function ($app) {
             return new AccountingExceptionResponder;
+        });
+
+        $this->app->singleton(AccountingHookManager::class, function ($app) {
+            return new AccountingHookManager;
         });
 
         $this->app->singleton(AccountCategoryRepository::class, fn () => new AccountCategoryRepository);
@@ -138,6 +144,13 @@ class AccountingServiceProvider extends ServiceProvider
                 $app->make(AccountRepository::class),
                 $app->make(JournalRepository::class),
                 $app->make(AccountingTableResolver::class)
+            );
+        });
+
+        $this->app->singleton(ServiceManagementService::class, function ($app) {
+            return new ServiceManagementService(
+                $app->make(ServiceRepository::class),
+                $app->make(AccountingHookManager::class)
             );
         });
 

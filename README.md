@@ -677,6 +677,7 @@ Request body:
   "service_code": "TEST_SERVICE",
   "service_name": "Test Service",
   "module_name": "TEST",
+  "updated_by": "947",
   "mappings": [
     {
       "mapping_key": "test_d",
@@ -761,6 +762,37 @@ Sample response shape:
   }
 }
 ```
+
+Notes:
+
+- `updated_by` is optional but part of the request contract for service create/update.
+- `updated_by` may be an integer-like value or a UUID string.
+- The package stores `updated_by` directly and does not validate it against any users table.
+- When omitted, the package stores `NULL`.
+
+### Global hook lifecycle
+
+The package includes a reusable hook lifecycle for API and service execution:
+
+```text
+before hook
+  ↓
+Business Logic
+  ↓
+after hook
+```
+
+Applications can register hook classes in `config/accounting.php` under `hooks.before` and `hooks.after`.
+
+Each hook must implement:
+
+- `ESolution\LaravelAccounting\Contracts\BeforeApiHook::handle(ESolution\LaravelAccounting\Support\ApiContext $context): void`
+- `ESolution\LaravelAccounting\Contracts\AfterApiHook::handle(ESolution\LaravelAccounting\Support\ApiContext $context, mixed $result): mixed`
+
+Current built-in usage includes:
+
+- `services.store`
+- `services.update`
 
 #### Trial balance
 

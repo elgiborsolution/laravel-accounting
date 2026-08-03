@@ -910,6 +910,7 @@ class AccountingConnectionModesTest extends TestCase
             $table->string('service_name', 200);
             $table->string('module_name', 100);
             $table->text('description')->nullable();
+            $table->string('updated_by', 100)->nullable();
             $table->boolean('is_active')->default(true);
             $table->timestamps();
         });

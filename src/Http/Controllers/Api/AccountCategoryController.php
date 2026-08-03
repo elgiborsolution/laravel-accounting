@@ -10,6 +10,7 @@ use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Services\AccountBalanceService;
 use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
+use ESolution\LaravelAccounting\Support\ApiContext;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
@@ -167,7 +168,9 @@ class AccountCategoryController extends BaseController
         $validated['type'] = strtoupper($validated['type']);
         $validated['report_type'] = $validated['report_type'] ?? ($validated['type'] === 'ASSET' || $validated['type'] === 'LIABILITY' || $validated['type'] === 'EQUITY' ? 'BS' : 'PL');
 
-        $category = AccountCategory::create($validated);
+        $category = $this->executeMutationHook('categories.store', $request, $validated, function (ApiContext $context) {
+            return AccountCategory::create($context->payload());
+        });
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account category created successfully', $category, 201);
@@ -222,7 +225,15 @@ class AccountCategoryController extends BaseController
             $validated['report_type'] = in_array($validated['type'] ?? $category->type, ['ASSET', 'LIABILITY', 'EQUITY'], true) ? 'BS' : 'PL';
         }
 
-        $category->update($validated);
+        $category = $this->executeMutationHook('categories.update', $request, $validated, function (ApiContext $context) {
+            /** @var AccountCategory $category */
+            $category = $context->get('category');
+            $category->update($context->payload());
+
+            return $category->fresh();
+        }, [
+            'category' => $category,
+        ]);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account category updated successfully', $category);
@@ -243,7 +254,16 @@ class AccountCategoryController extends BaseController
         if ($hasChildren || $hasAccounts) {
             return $this->errorResponse(['category' => 'Cannot delete category with descendants or accounts'], 422, 'Validation Error');
         }
-        $category->delete();
+
+        $this->executeMutationHook('categories.destroy', $request, [], function (ApiContext $context) {
+            /** @var AccountCategory $category */
+            $category = $context->get('category');
+            $category->delete();
+
+            return null;
+        }, [
+            'category' => $category,
+        ]);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account category deleted successfully');
@@ -258,8 +278,18 @@ class AccountCategoryController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $category = AccountCategory::findOrFail($id);
-        $category->status = ! $category->status;
-        $category->save();
+        $category = $this->executeMutationHook('categories.toggle-status', $request, [
+            'status' => ! $category->status,
+        ], function (ApiContext $context) {
+            /** @var AccountCategory $category */
+            $category = $context->get('category');
+            $category->status = (bool) ($context->payload()['status'] ?? ! $category->status);
+            $category->save();
+
+            return $category;
+        }, [
+            'category' => $category,
+        ]);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Account category status toggled successfully', $category);

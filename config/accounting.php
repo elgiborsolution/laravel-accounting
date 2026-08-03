@@ -73,4 +73,40 @@ return [
         'prefix' => 'api/accounting',
         'middleware' => ['api'],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | API Hooks
+    |--------------------------------------------------------------------------
+    |
+    | Hooks allow the host application to execute custom logic before and
+    | after package API or service execution.
+    |
+    | before:
+    | - Executed before the package runs the main business logic.
+    | - Receives ESolution\LaravelAccounting\Support\ApiContext.
+    | - Can inspect request, headers such as X-Tenant, authenticated user,
+    |   and current payload.
+    | - Can normalize or replace the payload through the context object.
+    | - Set to null to disable.
+    |
+    | after:
+    | - Executed after the package completes successfully.
+    | - Receives the same ApiContext plus the current result.
+    | - Can return the original result or a modified one.
+    | - Useful for audit logs, response decoration, sync jobs, notifications,
+    |   and cache invalidation.
+    | - Set to null to disable.
+    |
+    | To register a custom hook, point before/after to a concrete class in the
+    | host application, for example:
+    |
+    | 'before' => App\Accounting\Hooks\BeforeApiHook::class,
+    | 'after' => App\Accounting\Hooks\AfterApiHook::class,
+    |
+    */
+    'hooks' => [
+        'before' => null,
+        'after' => null,
+    ],
 ];

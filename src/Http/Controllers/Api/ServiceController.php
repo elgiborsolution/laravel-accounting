@@ -7,9 +7,10 @@ use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\Service;
 use ESolution\LaravelAccounting\Models\ServiceAccount;
 use ESolution\LaravelAccounting\Repositories\ServiceRepository;
+use ESolution\LaravelAccounting\Services\ServiceManagementService;
+use ESolution\LaravelAccounting\Support\ApiContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class ServiceController extends BaseController
@@ -36,6 +37,11 @@ class ServiceController extends BaseController
             'service_name' => 'required|string|max:200',
             'module_name' => 'required|string|max:100',
             'description' => 'nullable|string',
+            'updated_by' => ['nullable', function ($attribute, $value, $fail) {
+                if (! is_int($value) && ! is_string($value)) {
+                    $fail('The '.$attribute.' must be an integer or string.');
+                }
+            }],
             'status' => 'nullable|boolean',
             'mappings' => 'nullable|array',
             'mappings.*.mapping_key' => 'required|string|max:150',
@@ -47,27 +53,10 @@ class ServiceController extends BaseController
             'mappings.*.is_required' => 'nullable|boolean',
         ]);
 
-        return DB::connection((new Service)->getConnectionName())->transaction(function () use ($validated, $tenantId) {
-            $service = Service::create([
-                'service_code' => $validated['service_code'],
-                'service_name' => $validated['service_name'],
-                'module_name' => $validated['module_name'],
-                'description' => $validated['description'] ?? null,
-                'status' => $validated['status'] ?? true,
-            ]);
+        $service = app(ServiceManagementService::class)->create($validated, $request);
+        $this->clearCache($tenantId);
 
-            if (isset($validated['mappings'])) {
-                foreach ($validated['mappings'] as $mapping) {
-                    ServiceAccount::create($mapping + ['service_id' => $service->id]);
-                }
-            }
-
-            $service = app(ServiceRepository::class)->loadMappings($service);
-
-            $this->clearCache($tenantId);
-
-            return $this->successResponse('Service created successfully', $service, 201);
-        });
+        return $this->successResponse('Service created successfully', $service, 201);
     }
 
     public function show(Request $request, $tenantId = null, $id = null)
@@ -102,6 +91,11 @@ class ServiceController extends BaseController
             'service_name' => 'nullable|string|max:200',
             'module_name' => 'nullable|string|max:100',
             'description' => 'nullable|string',
+            'updated_by' => ['nullable', function ($attribute, $value, $fail) {
+                if (! is_int($value) && ! is_string($value)) {
+                    $fail('The '.$attribute.' must be an integer or string.');
+                }
+            }],
             'status' => 'nullable|boolean',
             'mappings' => 'nullable|array',
             'mappings.*.id' => ['nullable', Rule::exists(ServiceAccount::validationTable(), 'id')],
@@ -115,39 +109,10 @@ class ServiceController extends BaseController
             'mappings.*.status' => 'nullable|boolean',
         ]);
 
-        return DB::connection($service->getConnectionName())->transaction(function () use ($validated, $service, $tenantId) {
-            $service->update([
-                'service_code' => $validated['service_code'] ?? $service->service_code,
-                'service_name' => $validated['service_name'] ?? $service->service_name,
-                'module_name' => $validated['module_name'] ?? $service->module_name,
-                'description' => $validated['description'] ?? $service->description,
-                'status' => $validated['status'] ?? $service->status,
-            ]);
+        $service = app(ServiceManagementService::class)->update($service, $validated, $request);
+        $this->clearCache($tenantId);
 
-            if (isset($validated['mappings'])) {
-                $existingMappingIds = [];
-                foreach ($validated['mappings'] as $mappingData) {
-                    if (isset($mappingData['id'])) {
-                        $mapping = ServiceAccount::findOrFail($mappingData['id']);
-                        $mapping->update($mappingData);
-                        $existingMappingIds[] = $mapping->id;
-                    } else {
-                        $newMapping = ServiceAccount::create($mappingData + ['service_id' => $service->id]);
-                        $existingMappingIds[] = $newMapping->id;
-                    }
-                }
-                // Delete mappings not in the request
-                ServiceAccount::where('service_id', $service->id)
-                    ->whereNotIn('id', $existingMappingIds)
-                    ->delete();
-            }
-
-            $service = app(ServiceRepository::class)->loadMappings($service);
-
-            $this->clearCache($tenantId);
-
-            return $this->successResponse('Service updated successfully', $service);
-        });
+        return $this->successResponse('Service updated successfully', $service);
     }
 
     public function destroy(Request $request, $tenantId = null, $id = null)
@@ -159,7 +124,15 @@ class ServiceController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $service = Service::findOrFail($id);
-        $service->delete(); // This should cascade if DB rules allow, or we handle it manually
+        $this->executeMutationHook('services.destroy', $request, [], function (ApiContext $context) {
+            /** @var Service $service */
+            $service = $context->get('service');
+            $service->delete();
+
+            return null;
+        }, [
+            'service' => $service,
+        ]);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Service and its mappings deleted successfully');
@@ -174,8 +147,18 @@ class ServiceController extends BaseController
         $this->initializeTenantIfNeeded($tenantId);
 
         $service = Service::findOrFail($id);
-        $service->status = ! $service->status;
-        $service->save();
+        $service = $this->executeMutationHook('services.toggle-status', $request, [
+            'status' => ! $service->status,
+        ], function (ApiContext $context) {
+            /** @var Service $service */
+            $service = $context->get('service');
+            $service->status = (bool) ($context->payload()['status'] ?? ! $service->status);
+            $service->save();
+
+            return $service;
+        }, [
+            'service' => $service,
+        ]);
         $this->clearCache($tenantId);
 
         return $this->successResponse('Service status toggled successfully', $service);
