@@ -1042,7 +1042,16 @@ Example response:
 
 Description: returns all services and eagerly loads mappings plus mapped account data.
 
-Query parameters: none.
+Query parameters:
+
+- `status` optional boolean filter. Use `status=true` for active services or `status=false` for inactive services. If omitted, all services are returned.
+
+Examples:
+
+```text
+GET /api/accounting/services?status=true
+GET /api/accounting/services?status=false
+```
 
 Response body:
 

@@ -8,9 +8,11 @@ use Illuminate\Support\Collection;
 
 class ServiceRepository
 {
-    public function all(): Collection
+    public function all(?bool $status = null): Collection
     {
-        return Service::query()->get();
+        return Service::query()
+            ->when($status !== null, fn ($query) => $query->where('is_active', $status))
+            ->get();
     }
 
     public function findById(string $id): ?Service
@@ -46,8 +48,8 @@ class ServiceRepository
         return $service;
     }
 
-    public function allWithMappings(): Collection
+    public function allWithMappings(?bool $status = null): Collection
     {
-        return $this->all()->map(fn (Service $service) => $this->loadMappings($service));
+        return $this->all($status)->map(fn (Service $service) => $this->loadMappings($service));
     }
 }

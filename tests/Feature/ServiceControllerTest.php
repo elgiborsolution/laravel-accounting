@@ -86,6 +86,70 @@ class ServiceControllerTest extends TestCase
         ]);
     }
 
+    public function test_can_filter_services_by_true_status(): void
+    {
+        Service::create([
+            'service_code' => 'SERVICE-ACTIVE-FILTER',
+            'service_name' => 'Active Service',
+            'module_name' => 'FIN',
+            'status' => true,
+        ]);
+        Service::create([
+            'service_code' => 'SERVICE-INACTIVE-FILTER',
+            'service_name' => 'Inactive Service',
+            'module_name' => 'FIN',
+            'status' => false,
+        ]);
+
+        $response = $this->getJson('/api/accounting/services?status=true');
+
+        $response->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.service_code', 'SERVICE-ACTIVE-FILTER');
+    }
+
+    public function test_can_filter_services_by_false_status(): void
+    {
+        Service::create([
+            'service_code' => 'SERVICE-ACTIVE-FILTER-FALSE',
+            'service_name' => 'Active Service',
+            'module_name' => 'FIN',
+            'status' => true,
+        ]);
+        Service::create([
+            'service_code' => 'SERVICE-INACTIVE-FILTER-FALSE',
+            'service_name' => 'Inactive Service',
+            'module_name' => 'FIN',
+            'status' => false,
+        ]);
+
+        $response = $this->getJson('/api/accounting/services?status=false');
+
+        $response->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.service_code', 'SERVICE-INACTIVE-FILTER-FALSE');
+    }
+
+    public function test_services_are_unfiltered_when_status_is_omitted(): void
+    {
+        Service::create([
+            'service_code' => 'SERVICE-ACTIVE-UNFILTERED',
+            'service_name' => 'Active Service',
+            'module_name' => 'FIN',
+            'status' => true,
+        ]);
+        Service::create([
+            'service_code' => 'SERVICE-INACTIVE-UNFILTERED',
+            'service_name' => 'Inactive Service',
+            'module_name' => 'FIN',
+            'status' => false,
+        ]);
+
+        $response = $this->getJson('/api/accounting/services');
+
+        $response->assertOk()->assertJsonCount(2, 'data');
+    }
+
     public function test_service_api_hooks_can_modify_payload_and_result(): void
     {
         config()->set('accounting.hooks.before', BeforeServiceLifecycleTestHook::class);

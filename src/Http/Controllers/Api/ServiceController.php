@@ -21,8 +21,13 @@ class ServiceController extends BaseController
     {
         $this->initializeTenantIfNeeded($tenantId);
 
-        $services = Cache::tags($this->getCacheTags($tenantId))->rememberForever('index_all', function () {
-            return app(ServiceRepository::class)->allWithMappings();
+        $status = $request->has('status')
+            ? filter_var($request->query('status'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE)
+            : null;
+        $cacheKey = 'index_all'.($status === null ? '' : '_status_'.(int) $status);
+
+        $services = Cache::tags($this->getCacheTags($tenantId))->rememberForever($cacheKey, function () use ($status) {
+            return app(ServiceRepository::class)->allWithMappings($status);
         });
 
         return $this->successResponse('Services retrieved successfully', $services);
