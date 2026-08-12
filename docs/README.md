@@ -16,7 +16,7 @@ This documentation is the main technical reference for the package. It now uses 
 ## What Exists In Source
 
 - Facade: `Accounting`
-- Service classes: `AccountingService`, `JournalService`, `CoaService`, `MappingService`, `ClosingService`, `ReportService`
+- Service classes: `AccountingService`, `AccountCategoryTreeService`, `AccountBalanceService`, `AccountOpeningBalanceService`, `JournalService`, `MappingService`, `ServiceManagementService`, `CoaService`, `FiscalPeriodService`, `ClosingService`, `GeneralLedgerService`, `ReportService`
 - Hook contracts: `BeforeApiHook`, `AfterApiHook`, `AccountingHook`
 - Hook support: `ApiContext`, `AccountingHookManager`
 - Support registries: `ServiceCatalog`, `ServiceAccountTemplateRegistry`

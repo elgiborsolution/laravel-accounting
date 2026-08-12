@@ -214,7 +214,7 @@ class AccountBalanceService
         ];
     }
 
-    protected function applyMovement(float $balance, float $debit, float $credit, bool $isDebitNormal): float
+    public function applyMovement(float $balance, float $debit, float $credit, bool $isDebitNormal): float
     {
         return $isDebitNormal
             ? $balance + $debit - $credit

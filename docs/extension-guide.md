@@ -32,10 +32,16 @@ If shared master database mode is enabled, those seeders should target the confi
 The package uses Laravel container bindings. You can replace these in your application service provider:
 
 - `AccountingService`
+- `AccountCategoryTreeService`
+- `AccountBalanceService`
+- `AccountOpeningBalanceService`
 - `JournalService`
 - `CoaService`
 - `MappingService`
+- `ServiceManagementService`
 - `ClosingService`
+- `FiscalPeriodService`
+- `GeneralLedgerService`
 - `ReportService`
 - `ServiceCatalog`
 - `ServiceAccountTemplateRegistry`

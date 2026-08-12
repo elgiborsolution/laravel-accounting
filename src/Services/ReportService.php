@@ -2,12 +2,9 @@
 
 namespace ESolution\LaravelAccounting\Services;
 
-use ESolution\LaravelAccounting\Models\Account;
-use ESolution\LaravelAccounting\Models\JournalEntryDetail;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
-use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use Illuminate\Support\Collection;
@@ -19,14 +16,12 @@ class ReportService
         protected AccountCategoryTreeService $treeService,
         protected AccountCategoryRepository $categories,
         protected AccountRepository $accounts,
-        protected JournalRepository $journals,
         protected AccountingTableResolver $tables
     ) {
     }
 
     /**
-     * General Ledger Report
-     * Menampilkan mutasi detail per GL account.
+     * General Ledger summary for legacy custom date-range callers.
      */
     public function generalLedger($accountId, $startDate, $endDate)
     {
@@ -68,8 +63,6 @@ class ReportService
             }
         }
 
-        $details = $this->journals->getPostedDetailsByAccount($accountId, $startDate, $endDate);
-
         return [
             'account' => array_merge(
                 $account->toArray(),
@@ -78,7 +71,6 @@ class ReportService
                 ]
             ),
             'opening_balance' => $openingBalance,
-            'details' => $details,
         ];
     }
 

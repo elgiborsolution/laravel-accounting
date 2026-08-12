@@ -77,27 +77,105 @@ $service = Accounting::service(AccountingServiceCode::SALES_CASH);
 
 ## Service Classes
 
+This section is the source-based reference for every PHP class in `src/Services`. They are registered as singletons by `AccountingServiceProvider` and can be resolved with Laravel's container.
+
+Connection rules used by the service layer:
+
+- Master-data models and repositories use the shared master connection when `accounting.master_data.use_shared_database` is enabled; otherwise they use the current default connection.
+- Journals, fiscal periods, and monthly balances use the transaction connection from `AccountingConnectionResolver`.
+- The active Stancl tenant controls the runtime connection context. Services use package resolvers and table resolvers rather than hardcoded connection names or prefixes.
+
 ### `AccountingService`
 
 File: [`src/Services/AccountingService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/AccountingService.php)
 
-- `journal()`
-- `coa()`
-- `mapping()`
-- `closing()`
-- `report()`
-- `service(string|AccountingServiceCode $service)`
-- `catalog()`
+Purpose: facade-oriented entry point for the main services and the business-service catalog.
+
+Dependencies: `ServiceCatalog`, `ServiceRepository`, Laravel container.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `journal()` | None | `JournalService` | Resolves the journal service. |
+| `coa()` | None | `CoaService` | Resolves the chart-of-accounts service. |
+| `mapping()` | None | `MappingService` | Resolves the service-account mapping service. |
+| `closing()` | None | `ClosingService` | Resolves the fiscal closing service. |
+| `report()` | None | `ReportService` | Resolves the report service. |
+| `service(string\|AccountingServiceCode $service)` | Required service code | `Service\|null` | Normalizes the code through `ServiceCatalog` and loads the service record. |
+| `catalog()` | None | `ServiceCatalog` | Returns the package business-service catalog. |
+
+### `AccountCategoryTreeService`
+
+File: [`src/Services/AccountCategoryTreeService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/AccountCategoryTreeService.php)
+
+Purpose: reads and transforms the account-category hierarchy, with posting accounts grouped below their category.
+
+Dependencies: `AccountCategoryRepository`, `AccountRepository`.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `getCategories()` | None | `Collection<AccountCategory>` | Returns ordered categories. |
+| `getTree(?Collection $categories = null, ?Collection $accounts = null)` | Optional preloaded collections | `Collection` | Builds the category tree; loads collections when omitted. |
+| `buildNode(AccountCategory $category, ?Collection $categories = null, ?Collection $accounts = null)` | Category required; collections optional | `array` | Returns one complete tree node or an empty array. |
+| `getDescendants(AccountCategory $category)` | Category required | `Collection<AccountCategory>` | Returns recursive descendants. |
+| `buildPath(AccountCategory $category)` | Category required | `array` | Returns lineage category names. |
+| `flatten(Collection $tree)` | Tree required | `Collection` | Recursively flattens tree nodes. |
+
+### `AccountBalanceService`
+
+File: [`src/Services/AccountBalanceService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/AccountBalanceService.php)
+
+Purpose: bulk source of truth for account balances in a monthly period.
+
+Dependencies: `AccountCategoryRepository`, `AccountRepository`, `FiscalPeriodRepository`, `AccountingConnectionResolver`, `AccountingTableResolver`.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `getBalances(array $accountIds, ?int $year = null, ?int $month = null)` | Account IDs required; year/month optional | `Collection` keyed by account ID | Each value has `opening_balance`, `total_debit`, `total_credit`, and `ending_balance`. Invalid/omitted period values use the current period. |
+| `applyMovement(float $balance, float $debit, float $credit, bool $isDebitNormal)` | All required | `float` | Applies debit-normal or credit-normal movement to a balance. |
+
+Business rules:
+
+- An existing current `MonthlyBalance` is used first.
+- Missing monthly balances are calculated from the latest previous balance, carry-forward posted movements, and posted movements within the requested month.
+- Asset and expense are debit-normal; all other category types are credit-normal.
+- Aggregate journal queries use the resolved transaction connection and table prefix.
+
+### `AccountOpeningBalanceService`
+
+File: [`src/Services/AccountOpeningBalanceService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/AccountOpeningBalanceService.php)
+
+Purpose: creates or updates an account and its account-level opening-balance journal atomically.
+
+Dependencies: `JournalService`, `AccountingConnectionResolver`, `FiscalPeriodService`, account/journal models, cache, database transactions.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `createAccount(array $attributes)` | Required account attributes; opening-balance fields optional | `Account` | Creates the account and creates an opening-balance journal when `opening_balance > 0`. |
+| `updateAccount(Account $account, array $attributes)` | Account and attributes required | `Account` | Updates account data and creates or conditionally edits an opening balance. |
+| `resolveOpeningBalanceData(Account $account)` | Account required | `array\|null` | Returns `amount`, `date`, `journal_entry_id`, and `can_edit` when an opening balance exists. |
+
+Business rules:
+
+- A positive opening balance requires `opening_balance_date`, an active/postable account, and account code `3001` (`Opening Balance Equity`) as the contra account.
+- Journal lines follow account category normal balance and are created through `JournalService::journalManual()` with source type `ACCOUNT_OPENING_BALANCE`.
+- An existing opening balance can only be changed when no blocking journal transaction exists; a closed fiscal period cannot be edited.
+- Work spans account/master and journal/transaction connections in database transactions and flushes journal cache after direct journal edits.
 
 ### `JournalService`
 
 File: [`src/Services/JournalService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/JournalService.php)
 
-- `journalByMapping(array $data)`
-- `journalManual(array $data)`
-- `journalOpeningBalance(array $data)`
-- `reverse($journalId, string $reason)`
-- `post($id)`
+Purpose: creates, posts, and reverses transaction journals.
+
+Dependencies: `ServiceCatalog`, service/mapping/account/journal/fiscal-period repositories, `FiscalPeriodService`, transaction connection, cache.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `journalByMapping(array $data)` | `service_code` and `items` required; date/source/reference/description/`posted_by` optional | `JournalEntry` | Builds lines from active mappings. It creates draft then posts when `accounting.journal.auto_post` is enabled. |
+| `journalManual(array $data, bool $wrapTransaction = true)` | At least two `details` or `items` required; header fields optional | `JournalEntry` | Creates an immediately posted balanced manual journal. |
+| `journalOpeningBalance(array $data)` | At least two signed `details` required; header fields optional | `JournalEntry` | Creates the single package-wide `OPENING_BALANCE` journal. |
+| `reverse($journalId, string $reason, int\|string\|null $postedBy = null)` | Journal ID and reason required; poster optional | `JournalEntry` | Creates a new posted reversal with debit/credit swapped. |
+| `post($id, int\|string\|null $postedBy = null)` | Journal ID required; poster optional | `JournalEntry` | Posts a draft journal; returns an already posted journal unchanged. |
 
 Behavior notes:
 
@@ -109,7 +187,7 @@ Behavior notes:
 - `reverse()` creates a brand-new reversal journal and does not edit the original posted journal.
 - `post()` is idempotent for already-posted journals.
 
-Payload notes:
+Input notes:
 
 - `journalManual(array $data)`
   - `trx_date` required
@@ -131,52 +209,133 @@ Payload notes:
   - `posted_by` optional `int|string`
   - `items` required
 
-### `CoaService`
-
-File: [`src/Services/CoaService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/CoaService.php)
-
-- `createAccount(array $data)`
-- `getTree()`
-- `activateAccount($id)`
-- `deactivateAccount($id)`
-
-Behavior note:
-
-- `getTree()` is documented as returning the category tree with posting accounts grouped under their categories.
+Connection behavior: journal headers, details, fiscal periods, and writes use the resolved transaction connection. `journalByMapping()` reads service/mapping master data through repositories, so shared-master mode does not require a cross-connection join.
 
 ### `MappingService`
 
 File: [`src/Services/MappingService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/MappingService.php)
 
-- `findByKey(string $key)`
-- `getByService($serviceId)`
+Purpose: read-only lookup of service-account mappings.
 
-### `ClosingService`
+Dependency: `ServiceAccountRepository`.
 
-File: [`src/Services/ClosingService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ClosingService.php)
+| Method | Parameters | Returns |
+| --- | --- | --- |
+| `findByKey(string $key)` | Required mapping key | `ServiceAccount\|null` |
+| `getByService($serviceId)` | Required service ID | `Collection<ServiceAccount>` |
 
-- `closeMonth($year, $month, $userId = null)`
-- `closeThroughCurrentMonth($userId = null)`
-- `closeUntilCurrentMonth($userId = null)`
-- `reopenMonth($year, $month, $userId = null)`
+### `ServiceManagementService`
+
+File: [`src/Services/ServiceManagementService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ServiceManagementService.php)
+
+Purpose: creates and updates `Service` master records and their `ServiceAccount` mappings.
+
+Dependencies: `ServiceRepository`, `AccountingHookManager`, optional Laravel `Request`, database transactions.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `create(array $payload, ?Request $request = null)` | Service payload required; request optional | `Service` with mappings | Executes `services.store` hooks, creates service and supplied mappings atomically. |
+| `update(Service $service, array $payload, ?Request $request = null)` | Service/payload required; request optional | `Service` with mappings | Executes `services.update` hooks. Supplied mappings are updated/created; existing omitted mappings are deleted when `mappings` is present. |
+
+`updated_by` is normalized to a trimmed string or `null` without users-table validation. The service uses the `Service` model connection, so it follows shared-master configuration.
+
+### `CoaService`
+
+File: [`src/Services/CoaService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/CoaService.php)
+
+Purpose: chart-of-accounts helper over the account model and category tree service.
+
+Dependency: `AccountCategoryTreeService`.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `createAccount(array $data)` | Account attributes required | `Account` | Removes `parent_id` and `level` before creating an account. |
+| `getTree()` | None | `Collection` | Returns category tree with posting accounts. |
+| `activateAccount($id)` | Account ID required | `int` | Updates `is_active` to `true` and returns affected rows. |
+| `deactivateAccount($id)` | Account ID required | `int` | Updates `is_active` to `false` and returns affected rows. |
 
 ### `FiscalPeriodService`
 
 File: [`src/Services/FiscalPeriodService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/FiscalPeriodService.php)
 
-- `ensureForDate($date)`
-- `ensureThroughCurrentMonth(?Carbon $fromDate = null)`
-- `ensureForJournalDate($date)`
+Purpose: ensures fiscal-period records exist for journal and closing workflows.
+
+Dependency: `FiscalPeriodRepository`.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `ensureForDate($date)` | Parseable date required | `FiscalPeriod` | Creates or returns the period for the date. |
+| `ensureThroughCurrentMonth(?Carbon $fromDate = null)` | Optional starting Carbon date | `Collection<FiscalPeriod>` | Ensures periods from the supplied date, earliest journal date, or current month through the current month. |
+| `ensureForJournalDate($date)` | Parseable date required | `FiscalPeriod` | Alias for `ensureForDate()`. |
+
+### `ClosingService`
+
+File: [`src/Services/ClosingService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ClosingService.php)
+
+Purpose: closes/reopens fiscal months and materializes account `MonthlyBalance` rows.
+
+Dependencies: `AccountCategoryRepository`, `AccountingTableResolver`, `FiscalPeriodService`, transaction connection, cache, database transactions.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `closeMonth($year, $month, $userId = null)` | Year/month required; closer ID optional | `FiscalPeriod` | Ensures the period, upserts monthly balances, and marks it closed. |
+| `closeThroughCurrentMonth($userId = null)` | Optional closer ID | `Collection<FiscalPeriod>` | Closes every currently open period through the current month. |
+| `closeUntilCurrentMonth($userId = null)` | Optional closer ID | `Collection<FiscalPeriod>` | Alias of `closeThroughCurrentMonth()`. |
+| `reopenMonth($year, $month, $userId = null)` | Year/month required; user ID currently unused | `FiscalPeriod` | Reopens one closed period. |
+
+Rules: closing rejects already-closed periods and unbalanced posted journals; ending balances use category normal balance and the prior month's ending balance. Reopening is blocked while subsequent periods are still closed. Queries use the resolved transaction connection and resolved tables.
+
+### `GeneralLedgerService`
+
+File: [`src/Services/GeneralLedgerService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/GeneralLedgerService.php)
+
+Purpose: monthly General Ledger summary and journal-detail source of truth.
+
+Dependencies: `AccountRepository`, `AccountCategoryRepository`, `AccountBalanceService`, `AccountingConnectionResolver`, `AccountingTableResolver`, `GeneralLedgerPaginator`.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `getLedger(string $accountId, int $year, int $month)` | All required | `array` | Returns account, period, opening balance, total debit, total credit, and ending balance. It does not return `details`. |
+| `getLedgerDetails(string $accountId, int $year, int $month, string\|int\|null $tenant = null, ?int $page = null, ?int $perPage = null)` | Account/year/month required; tenant/page/per-page optional | `GeneralLedgerPaginator` | Returns native paginator fields plus complete-period General Ledger summary. |
+| `getDetails(string $accountId, string $startDate, string $endDate, float $openingBalance, bool $isDebitNormal)` | All required | `array` | Loads posted movements and calculates running ending balance per row. |
+
+General Ledger rules:
+
+- Summary uses `AccountBalanceService` and does not query journal detail rows.
+- Detail rows include `date`, `journal_number`, `reference_no`, `description`, `debit`, `credit`, and `ending_balance`.
+- Detail running balances are calculated for the complete period before pagination, so later pages continue from earlier pages.
+- Opening balance, debit total, credit total, and ending balance represent the whole selected period, never only the current page.
+- Page/per-page default to `1`/`15`; values below one become one. Legacy positional calls with an integer fourth argument remain interpreted as page/per-page arguments.
+- `$tenant` is service-only. A non-empty value resolves and temporarily initializes that Stancl tenant, takes precedence over the runtime tenant for all account/balance/journal work, then restores the prior context. It is not read from any HTTP header or request value.
+- Journal detail reads use the resolved transaction connection, resolved table prefix, and only `posted` journals.
+
+Example:
+
+```php
+use ESolution\LaravelAccounting\Services\GeneralLedgerService;
+
+$summary = app(GeneralLedgerService::class)->getLedger($accountId, 2026, 7);
+$details = app(GeneralLedgerService::class)->getLedgerDetails($accountId, 2026, 7, null, 2, 20);
+```
 
 ### `ReportService`
 
 File: [`src/Services/ReportService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ReportService.php)
 
-- `generalLedger($accountId, $startDate, $endDate)`
-- `trialBalance($year, $month)`
-- `profitLoss($year, $month)`
-- `balanceSheet($year, $month)`
-- `cashFlow($year, $month)`
+Purpose: legacy custom-range General Ledger summary and category-tree financial reports.
+
+Dependencies: `AccountCategoryTreeService`, account/category repositories, `AccountingTableResolver`, `MonthlyBalance`, transaction connection.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `generalLedger($accountId, $startDate, $endDate)` | All required | `array` | Legacy custom-date-range summary with account/category path and opening balance. It does not return journal details. |
+| `trialBalance($year, $month)` | Year/month required | `array` | Tree data plus total assets, liabilities, and equity. |
+| `profitLoss($year, $month)` | Year/month required | `array` | Revenue/expense tree data and net income. |
+| `balanceSheet($year, $month)` | Year/month required | `array` | Asset/liability/equity tree data and totals. |
+| `cashFlow($year, $month)` | Year/month required | `array` | Operating/investing/financing tree data and net cash flow. |
+
+Rules: financial reports use monthly balances on the resolved transaction connection and category/account master data via repositories. Tree balances aggregate posting accounts and descendants. The legacy General Ledger adjusts opening balance by posted movements from month start to a non-first-day start date without loading detail rows.
+
 
 ## Support Registries
 
@@ -274,6 +433,7 @@ Public methods:
 | JournalController | GET | `/api/accounting/journals/{id}` |
 | JournalController | POST | `/api/accounting/journals/{id}/reverse` |
 | ReportController | GET | `/api/accounting/reports/general-ledger` |
+| ReportController | GET | `/api/accounting/reports/general-ledger/details` |
 | ReportController | GET | `/api/accounting/reports/trial-balance` |
 | ReportController | GET | `/api/accounting/reports/profit-loss` |
 | ReportController | GET | `/api/accounting/reports/balance-sheet` |
@@ -1685,19 +1845,30 @@ Notes:
 
 ### GET `/api/accounting/reports/general-ledger`
 
-Description: returns general ledger movement for a single account.
+Description: returns General Ledger summary information for a single account. Journal details are available exclusively from `GET /api/accounting/reports/general-ledger/details`.
 
 Query parameters:
 
 - `account_id` required uuid
-- `start_date` required date
-- `end_date` required date and must be greater than or equal to `start_date`
+- `year` required integer when `start_date` is not supplied
+- `month` required integer between 1 and 12 when `year` is supplied
+- `start_date` optional date for the legacy custom-date-range response
+- `end_date` required with `start_date` and must be greater than or equal to `start_date`
+
+Monthly General Ledger example:
+
+```text
+GET /api/accounting/reports/general-ledger?account_id=uuid&year=2026&month=7
+```
 
 Response body:
 
 - `account`
+- `period` containing `year`, `month`, `start_date`, and `end_date`
 - `opening_balance`
-- `details`
+- `total_debit`
+- `total_credit`
+- `ending_balance`
 - `account.category_path`
 
 Example response:
@@ -1713,9 +1884,81 @@ Example response:
       "name": "Cash",
       "category_path": ["Asset", "Current Asset"]
     },
+    "period": {
+      "year": 2026,
+      "month": 7,
+      "start_date": "2026-07-01",
+      "end_date": "2026-07-31"
+    },
     "opening_balance": 1000,
-    "details": []
+    "total_debit": 500000,
+    "total_credit": 125000,
+    "ending_balance": 376000
   }
+}
+```
+
+### GET `/api/accounting/reports/general-ledger/details`
+
+Description: returns paginated General Ledger detail for one account and one monthly period. This endpoint returns the `GeneralLedgerService` paginator directly, without the package success envelope or another pagination wrapper.
+
+Service: `GeneralLedgerService::getLedgerDetails($accountId, $year, $month, $tenant = null, $page = 1, $perPage = 15)` returns this same paginator structure for internal callers. The optional `$tenant` argument is service-only: when supplied it temporarily resolves that Stancl tenant in preference to the current runtime tenant. It is not an API query parameter and is never read from `X-Tenant`.
+
+Query parameters:
+
+- `account_id` required uuid
+- `year` required integer
+- `month` required integer between 1 and 12
+- `page` optional integer, default `1`
+- `per_page` optional integer between `1` and `100`, default `15`
+
+Example:
+
+```text
+GET /api/accounting/reports/general-ledger/details?account_id=uuid&year=2026&month=7&page=1&per_page=20
+```
+
+Response behavior:
+
+- The response is a Laravel `LengthAwarePaginator` payload. Its standard fields include `current_page`, `data`, `per_page`, `total`, and page URLs.
+- `account`, `period`, `opening_balance`, `total_debit`, `total_credit`, and `ending_balance` are ledger-wide values for the complete selected month, not just the current page.
+- Each item in `data` contains `date`, `journal_number`, `reference_no`, `description`, `debit`, `credit`, and `ending_balance`.
+- Running `ending_balance` is calculated from every posted movement in the selected period before pagination. It therefore continues correctly across page boundaries.
+- The API returns the exact paginator returned by `GeneralLedgerService::getLedgerDetails()`; it does not add a `data` or `pagination` wrapper.
+
+Example response:
+
+```json
+{
+  "current_page": 1,
+  "data": [
+    {
+      "date": "2026-07-10",
+      "journal_number": "JV-2026-0001",
+      "reference_no": "SALES-001",
+      "description": "Penjualan Tunai",
+      "debit": 500000,
+      "credit": 0,
+      "ending_balance": 501000
+    }
+  ],
+  "per_page": 20,
+  "total": 50,
+  "account": {
+    "id": "uuid",
+    "code": "1001",
+    "name": "Cash"
+  },
+  "period": {
+    "year": 2026,
+    "month": 7,
+    "start_date": "2026-07-01",
+    "end_date": "2026-07-31"
+  },
+  "opening_balance": 1000,
+  "total_debit": 500000,
+  "total_credit": 125000,
+  "ending_balance": 376000
 }
 ```
 

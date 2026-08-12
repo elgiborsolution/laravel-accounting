@@ -49,6 +49,7 @@ $defineRoutes = function ($tenantId = null) {
 
     // Reports
     Route::prefix($prefix.'reports')->group(function () use ($tenantId) {
+        Route::get('general-ledger/details', [ReportController::class, 'generalLedgerDetails'])->name($tenantId ? 'tenant.reports.general-ledger.details' : 'reports.general-ledger.details');
         Route::get('general-ledger', [ReportController::class, 'generalLedger'])->name($tenantId ? 'tenant.reports.general-ledger' : 'reports.general-ledger');
         Route::get('trial-balance', [ReportController::class, 'trialBalance'])->name($tenantId ? 'tenant.reports.trial-balance' : 'reports.trial-balance');
         Route::get('profit-loss', [ReportController::class, 'profitLoss'])->name($tenantId ? 'tenant.reports.profit-loss' : 'reports.profit-loss');

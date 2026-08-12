@@ -93,11 +93,16 @@ The facade exposes the package entry points:
 `AccountingServiceProvider` binds the main service classes as singletons:
 
 - `AccountingService`
+- `AccountCategoryTreeService`
+- `AccountBalanceService`
+- `AccountOpeningBalanceService`
 - `JournalService`
 - `CoaService`
 - `MappingService`
+- `ServiceManagementService`
 - `ClosingService`
 - `FiscalPeriodService`
+- `GeneralLedgerService`
 - `ReportService`
 - `ServiceCatalog`
 - `ServiceAccountTemplateRegistry`

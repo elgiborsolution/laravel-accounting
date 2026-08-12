@@ -529,6 +529,20 @@ class AccountingConnectionModesTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('data.account.id', $account->id)
             ->assertJsonPath('data.opening_balance', 150);
+
+        $monthlyResponse = $this->getJson("/api/accounting/reports/general-ledger?account_id={$account->id}&year=2026&month=7");
+
+        $monthlyResponse->assertOk()
+            ->assertJsonPath('data.account.id', $account->id)
+            ->assertJsonPath('data.opening_balance', 100)
+            ->assertJsonMissingPath('data.details');
+
+        $detailResponse = $this->getJson("/api/accounting/reports/general-ledger/details?account_id={$account->id}&year=2026&month=7");
+
+        $detailResponse->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.journal_number', 'JV/2026/07/0003')
+            ->assertJsonPath('data.0.ending_balance', 150);
     }
 
     public function test_multi_tenant_without_shared_master_keeps_master_data_on_tenant_connection(): void

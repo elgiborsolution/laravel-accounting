@@ -9,6 +9,7 @@ use ESolution\LaravelAccounting\Services\AccountingService;
 use ESolution\LaravelAccounting\Services\ClosingService;
 use ESolution\LaravelAccounting\Services\CoaService;
 use ESolution\LaravelAccounting\Services\FiscalPeriodService;
+use ESolution\LaravelAccounting\Services\GeneralLedgerService;
 use ESolution\LaravelAccounting\Services\JournalService;
 use ESolution\LaravelAccounting\Services\MappingService;
 use ESolution\LaravelAccounting\Services\ReportService;
@@ -115,6 +116,16 @@ class AccountingServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(GeneralLedgerService::class, function ($app) {
+            return new GeneralLedgerService(
+                $app->make(AccountRepository::class),
+                $app->make(AccountCategoryRepository::class),
+                $app->make(AccountBalanceService::class),
+                $app->make(AccountingConnectionResolver::class),
+                $app->make(AccountingTableResolver::class)
+            );
+        });
+
         $this->app->singleton(AccountOpeningBalanceService::class, function ($app) {
             return new AccountOpeningBalanceService(
                 $app->make(JournalService::class),
@@ -142,7 +153,6 @@ class AccountingServiceProvider extends ServiceProvider
                 $app->make(AccountCategoryTreeService::class),
                 $app->make(AccountCategoryRepository::class),
                 $app->make(AccountRepository::class),
-                $app->make(JournalRepository::class),
                 $app->make(AccountingTableResolver::class)
             );
         });
