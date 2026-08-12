@@ -17,8 +17,6 @@ return [
     ['service_code' => 'STOCK_ADJUSTMENT_PLUS', 'service_name' => 'Penyesuaian Persediaan Plus', 'module_name' => 'INVENTORY', 'description' => 'Mencatat kenaikan persediaan dari penyesuaian di luar alur pembelian normal.', 'is_active' => true],
     ['service_code' => 'STOCK_ADJUSTMENT_MINUS', 'service_name' => 'Penyesuaian Persediaan Minus', 'module_name' => 'INVENTORY', 'description' => 'Mencatat penurunan persediaan dari penyesuaian di luar alur penjualan normal.', 'is_active' => true],
     ['service_code' => 'STOCK_TRANSFER', 'service_name' => 'Transfer Persediaan', 'module_name' => 'INVENTORY', 'description' => 'Mencatat perpindahan persediaan antar gudang, lokasi, atau segmen stok.', 'is_active' => true],
-    ['service_code' => 'STOCK_OPNAME_GAIN', 'service_name' => 'Selisih Persediaan Lebih', 'module_name' => 'INVENTORY', 'description' => 'Mencatat kelebihan persediaan yang ditemukan saat stok opname atau stock count.', 'is_active' => true],
-    ['service_code' => 'STOCK_OPNAME_LOSS', 'service_name' => 'Selisih Persediaan Kurang', 'module_name' => 'INVENTORY', 'description' => 'Mencatat kekurangan persediaan yang ditemukan saat stok opname atau stock count.', 'is_active' => true],
 
     ['service_code' => 'CASH_IN', 'service_name' => 'Penerimaan Kas', 'module_name' => 'FINANCE', 'description' => 'Mencatat penerimaan kas non-penjualan seperti pendapatan lain atau setoran pemilik.', 'is_active' => true],
     ['service_code' => 'CASH_OUT', 'service_name' => 'Pengeluaran Kas', 'module_name' => 'FINANCE', 'description' => 'Mencatat pengeluaran kas non-pembelian seperti pembayaran operasional.', 'is_active' => true],

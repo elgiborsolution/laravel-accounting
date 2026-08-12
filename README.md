@@ -407,7 +407,7 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 | --- | --- |
 | SALES | `SALES_CASH`, `SALES_CASH_VAT`, `SALES_CREDIT`, `SALES_CREDIT_VAT`, `SALES_RETURN`, `SALES_DISCOUNT`, `SALES_WRITE_OFF` |
 | PURCHASE | `PURCHASE_CASH`, `PURCHASE_CREDIT`, `PURCHASE_RETURN` |
-| INVENTORY | `STOCK_OPENING`, `STOCK_ADJUSTMENT_PLUS`, `STOCK_ADJUSTMENT_MINUS`, `STOCK_TRANSFER`, `STOCK_OPNAME_GAIN`, `STOCK_OPNAME_LOSS` |
+| INVENTORY | `STOCK_OPENING`, `STOCK_ADJUSTMENT_PLUS`, `STOCK_ADJUSTMENT_MINUS`, `STOCK_TRANSFER` |
 | FINANCE | `CASH_IN`, `CASH_OUT`, `BANK_TRANSFER`, `JOURNAL_MANUAL`, `PETTY_CASH` |
 | EXPENSE | `EXPENSE`, `PREPAID_EXPENSE` |
 | PAYROLL | `PAYROLL`, `PAYROLL_ACCRUAL` |
@@ -435,8 +435,6 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 | `STOCK_ADJUSTMENT_PLUS` | Positive inventory adjustments. |
 | `STOCK_ADJUSTMENT_MINUS` | Negative inventory adjustments. |
 | `STOCK_TRANSFER` | Inventory movement between locations. |
-| `STOCK_OPNAME_GAIN` | Surplus stock found during stock count. |
-| `STOCK_OPNAME_LOSS` | Missing stock found during stock count. |
 | `CASH_IN` | General non-sales cash receipts. |
 | `CASH_OUT` | General non-purchase cash disbursements. |
 | `BANK_TRANSFER` | Transfers between cash and bank accounts. |
@@ -522,8 +520,6 @@ $cashFlow = $reportService->cashFlow(2026, 1);
 | `STOCK_ADJUSTMENT_PLUS` | `stock_adjustment_plus_inventory_d`, `stock_adjustment_plus_gain_k` | No |
 | `STOCK_ADJUSTMENT_MINUS` | `stock_adjustment_minus_loss_d`, `stock_adjustment_minus_inventory_k` | No |
 | `STOCK_TRANSFER` | No default journal mapping | Future customization |
-| `STOCK_OPNAME_GAIN` | `stock_opname_gain_inventory_d`, `stock_opname_gain_gain_k` | No |
-| `STOCK_OPNAME_LOSS` | `stock_opname_loss_loss_d`, `stock_opname_loss_inventory_k` | No |
 | `CASH_IN` | `cash_in_cash_d`, `cash_in_other_income_k` | Cash/Bank |
 | `CASH_OUT` | `cash_out_expense_d`, `cash_out_cash_k` | Expense Account, Cash/Bank |
 | `BANK_TRANSFER` | `bank_transfer_destination_bank_d`, `bank_transfer_source_bank_k` | Source Bank, Destination Bank |

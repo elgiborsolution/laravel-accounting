@@ -257,32 +257,6 @@ app(\ESolution\LaravelAccounting\Services\JournalService::class)->journalByMappi
 - Dynamic mappings: none
 - Notes: intentionally has no default journal template so integrators can define location-specific logic later.
 
-### `STOCK_OPNAME_GAIN`
-
-- Service code: `STOCK_OPNAME_GAIN`
-- Description: Stock opname gain.
-- Business purpose: Record surplus stock discovered during a stock count.
-- Default journal template:
-  - Debit: Inventory
-  - Credit: Inventory Gain
-- Required mappings:
-  - `stock_opname_gain_inventory_d`
-  - `stock_opname_gain_gain_k`
-- Dynamic mappings: none
-
-### `STOCK_OPNAME_LOSS`
-
-- Service code: `STOCK_OPNAME_LOSS`
-- Description: Stock opname loss.
-- Business purpose: Record stock shortage discovered during a stock count.
-- Default journal template:
-  - Debit: Inventory Loss
-  - Credit: Inventory
-- Required mappings:
-  - `stock_opname_loss_loss_d`
-  - `stock_opname_loss_inventory_k`
-- Dynamic mappings: none
-
 ## FINANCE
 
 ### `CASH_IN`

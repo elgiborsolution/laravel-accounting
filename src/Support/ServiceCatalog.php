@@ -60,8 +60,6 @@ class ServiceCatalog
             $this->definition(AccountingServiceCode::STOCK_ADJUSTMENT_PLUS, 'Stock Adjustment Plus', 'INVENTORY', 'Records inventory increases from adjustments outside normal purchasing flow.'),
             $this->definition(AccountingServiceCode::STOCK_ADJUSTMENT_MINUS, 'Stock Adjustment Minus', 'INVENTORY', 'Records inventory decreases from adjustments outside normal sales flow.'),
             $this->definition(AccountingServiceCode::STOCK_TRANSFER, 'Stock Transfer', 'INVENTORY', 'Records inventory movements between warehouses, locations, or stock segments.'),
-            $this->definition(AccountingServiceCode::STOCK_OPNAME_GAIN, 'Stock Opname Gain', 'INVENTORY', 'Records surplus inventory discovered during stock opname or stock count.'),
-            $this->definition(AccountingServiceCode::STOCK_OPNAME_LOSS, 'Stock Opname Loss', 'INVENTORY', 'Records inventory shortages discovered during stock opname or stock count.'),
         ];
     }
 

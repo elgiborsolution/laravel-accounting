@@ -74,14 +74,6 @@ class ServiceAccountTemplateRegistry
                 $this->template('stock_adjustment_minus_inventory_k', 'Stock Adjustment Minus - Inventory', 'K', '1201', 2),
             ],
             AccountingServiceCode::STOCK_TRANSFER->value => [],
-            AccountingServiceCode::STOCK_OPNAME_GAIN->value => [
-                $this->template('stock_opname_gain_inventory_d', 'Stock Opname Gain - Inventory', 'D', '1201', 1),
-                $this->template('stock_opname_gain_gain_k', 'Stock Opname Gain - Inventory Gain', 'K', '4201', 2),
-            ],
-            AccountingServiceCode::STOCK_OPNAME_LOSS->value => [
-                $this->template('stock_opname_loss_loss_d', 'Stock Opname Loss - Inventory Loss', 'D', '5301', 1),
-                $this->template('stock_opname_loss_inventory_k', 'Stock Opname Loss - Inventory', 'K', '1201', 2),
-            ],
             AccountingServiceCode::CASH_IN->value => [
                 $this->template('cash_in_cash_d', 'Cash In - Cash/Bank', 'D', '1001', 1, true),
                 $this->template('cash_in_other_income_k', 'Cash In - Other Income', 'K', '4101', 2),

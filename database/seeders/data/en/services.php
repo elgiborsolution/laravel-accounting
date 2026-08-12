@@ -17,8 +17,6 @@ return [
     ['service_code' => 'STOCK_ADJUSTMENT_PLUS', 'service_name' => 'Stock Adjustment Plus', 'module_name' => 'INVENTORY', 'description' => 'Records inventory increases from adjustments outside normal purchasing flow.', 'is_active' => true],
     ['service_code' => 'STOCK_ADJUSTMENT_MINUS', 'service_name' => 'Stock Adjustment Minus', 'module_name' => 'INVENTORY', 'description' => 'Records inventory decreases from adjustments outside normal sales flow.', 'is_active' => true],
     ['service_code' => 'STOCK_TRANSFER', 'service_name' => 'Stock Transfer', 'module_name' => 'INVENTORY', 'description' => 'Records inventory movements between warehouses, locations, or stock segments.', 'is_active' => true],
-    ['service_code' => 'STOCK_OPNAME_GAIN', 'service_name' => 'Stock Opname Gain', 'module_name' => 'INVENTORY', 'description' => 'Records surplus inventory discovered during stock opname or stock count.', 'is_active' => true],
-    ['service_code' => 'STOCK_OPNAME_LOSS', 'service_name' => 'Stock Opname Loss', 'module_name' => 'INVENTORY', 'description' => 'Records inventory shortages discovered during stock opname or stock count.', 'is_active' => true],
 
     ['service_code' => 'CASH_IN', 'service_name' => 'Cash In', 'module_name' => 'FINANCE', 'description' => 'Records non-sales cash receipts such as miscellaneous income or owner funding.', 'is_active' => true],
     ['service_code' => 'CASH_OUT', 'service_name' => 'Cash Out', 'module_name' => 'FINANCE', 'description' => 'Records non-purchase cash disbursements such as operational payouts.', 'is_active' => true],

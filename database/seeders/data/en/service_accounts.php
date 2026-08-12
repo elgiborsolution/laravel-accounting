@@ -52,12 +52,6 @@ return [
     ['service_code' => 'STOCK_ADJUSTMENT_MINUS', 'mapping_key' => 'stock_adjustment_minus_loss_d', 'mapping_name' => 'Stock Adjustment Minus - Inventory Loss', 'position' => 'D', 'account_code' => '5301', 'sequence_no' => 1, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
     ['service_code' => 'STOCK_ADJUSTMENT_MINUS', 'mapping_key' => 'stock_adjustment_minus_inventory_k', 'mapping_name' => 'Stock Adjustment Minus - Inventory', 'position' => 'K', 'account_code' => '1201', 'sequence_no' => 2, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
 
-    ['service_code' => 'STOCK_OPNAME_GAIN', 'mapping_key' => 'stock_opname_gain_inventory_d', 'mapping_name' => 'Stock Opname Gain - Inventory', 'position' => 'D', 'account_code' => '1201', 'sequence_no' => 1, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
-    ['service_code' => 'STOCK_OPNAME_GAIN', 'mapping_key' => 'stock_opname_gain_gain_k', 'mapping_name' => 'Stock Opname Gain - Inventory Gain', 'position' => 'K', 'account_code' => '4201', 'sequence_no' => 2, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
-
-    ['service_code' => 'STOCK_OPNAME_LOSS', 'mapping_key' => 'stock_opname_loss_loss_d', 'mapping_name' => 'Stock Opname Loss - Inventory Loss', 'position' => 'D', 'account_code' => '5301', 'sequence_no' => 1, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
-    ['service_code' => 'STOCK_OPNAME_LOSS', 'mapping_key' => 'stock_opname_loss_inventory_k', 'mapping_name' => 'Stock Opname Loss - Inventory', 'position' => 'K', 'account_code' => '1201', 'sequence_no' => 2, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
-
     ['service_code' => 'CASH_IN', 'mapping_key' => 'cash_in_cash_d', 'mapping_name' => 'Cash In - Cash/Bank', 'position' => 'D', 'account_code' => '1001', 'sequence_no' => 1, 'is_dynamic' => true, 'is_required' => true, 'is_active' => true],
     ['service_code' => 'CASH_IN', 'mapping_key' => 'cash_in_other_income_k', 'mapping_name' => 'Cash In - Other Income', 'position' => 'K', 'account_code' => '4101', 'sequence_no' => 2, 'is_dynamic' => false, 'is_required' => true, 'is_active' => true],
 
