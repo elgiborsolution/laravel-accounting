@@ -45,9 +45,9 @@ class AccountCategoryRepository
         return $descendants->values();
     }
 
-    public function buildLineage(AccountCategory $category): Collection
+    public function buildLineage(AccountCategory $category, ?Collection $categories = null): Collection
     {
-        $categories = $this->allOrdered()->keyBy('id');
+        $categories = ($categories ?? $this->allOrdered())->keyBy('id');
         $lineage = collect([$category]);
         $current = $categories->get($category->parent_id);
 

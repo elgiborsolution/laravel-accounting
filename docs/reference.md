@@ -1022,7 +1022,7 @@ Example response:
 
 ### GET `/api/accounting/accounts/{id}`
 
-Description: returns one account with its category relation.
+Description: returns one account with its direct category, root category, and complete category parent hierarchy.
 
 Path parameters:
 
@@ -1042,6 +1042,13 @@ Opening balance response:
   - `journal_entry_id`
   - `can_edit`
 - `can_edit` is `true` only when the opening balance journal exists and no other journal entry exists on or after the opening balance date.
+
+Category response:
+
+- `category` contains the account's direct category.
+- `root_category` contains the highest category in the account category hierarchy.
+- `category_tree` starts with the direct category and nests each parent under `parent` until the root category, whose `parent` is `null`.
+- When the account category cannot be resolved, `category`, `root_category`, and `category_tree` are all `null`.
 
 Example response:
 
@@ -1066,7 +1073,24 @@ Example response:
     },
     "category": {
       "id": "uuid",
-      "category_name": "Current Asset"
+      "name": "Cash"
+    },
+    "root_category": {
+      "id": "root-category-uuid",
+      "name": "Asset"
+    },
+    "category_tree": {
+      "id": "uuid",
+      "name": "Cash",
+      "parent": {
+        "id": "parent-category-uuid",
+        "name": "Current Asset",
+        "parent": {
+          "id": "root-category-uuid",
+          "name": "Asset",
+          "parent": null
+        }
+      }
     }
   }
 }

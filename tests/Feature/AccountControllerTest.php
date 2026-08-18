@@ -398,6 +398,27 @@ class AccountControllerTest extends TestCase
             ->assertJsonPath('data.opening_balance', null);
     }
 
+    public function test_account_detail_includes_category_representations(): void
+    {
+        $root = AccountCategory::where('category_code', 'ASSET')->firstOrFail();
+        $parent = AccountCategory::where('category_code', 'CURRENT_ASSET')->firstOrFail();
+        $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->firstOrFail();
+        $account = Account::factory()->create(['category_id' => $category->id]);
+
+        $response = $this->getJson("/api/accounting/accounts/{$account->id}");
+
+        $response->assertOk()
+            ->assertJsonPath('data.category.id', $category->id)
+            ->assertJsonPath('data.category.name', $category->category_name)
+            ->assertJsonPath('data.root_category.id', $root->id)
+            ->assertJsonPath('data.root_category.name', $root->category_name)
+            ->assertJsonPath('data.category_tree.id', $category->id)
+            ->assertJsonPath('data.category_tree.name', $category->category_name)
+            ->assertJsonPath('data.category_tree.parent.id', $parent->id)
+            ->assertJsonPath('data.category_tree.parent.parent.id', $root->id)
+            ->assertJsonPath('data.category_tree.parent.parent.parent', null);
+    }
+
     public function test_can_show_account_with_balance(): void
     {
         $category = AccountCategory::where('category_code', 'CASH_CASH_EQUIVALENT')->first();

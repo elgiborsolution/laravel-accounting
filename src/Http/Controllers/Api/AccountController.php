@@ -141,7 +141,7 @@ class AccountController extends BaseController
                 abort(404);
             }
 
-            $acc = app(AccountRepository::class)->attachCategories(collect([$acc]))->first();
+            $acc = $this->attachCategoryHierarchy($acc);
             $balance = app(AccountBalanceService::class)->getBalances([$acc->id], $balanceYear, $balanceMonth)->get($acc->id);
 
             if ($balance) {
@@ -376,6 +376,45 @@ class AccountController extends BaseController
 
             return $account;
         });
+    }
+
+    protected function attachCategoryHierarchy(Account $account): Account
+    {
+        $categoryRepository = app(AccountCategoryRepository::class);
+        $categories = $categoryRepository->allOrdered();
+        $category = $categories->firstWhere('id', $account->category_id);
+
+        if (! $category) {
+            $account->setRelation('category', null);
+            $account->setAttribute('root_category', null);
+            $account->setAttribute('category_tree', null);
+
+            return $account;
+        }
+
+        $lineage = $categoryRepository->buildLineage($category, $categories);
+        $rootCategory = $lineage->first();
+        $categoryTree = null;
+
+        foreach ($lineage as $lineageCategory) {
+            $categoryTree = [
+                'id' => $lineageCategory->id,
+                'name' => $lineageCategory->category_name,
+                'parent' => $categoryTree,
+            ];
+        }
+
+        $account->setRelation('category', collect([
+            'id' => $category->id,
+            'name' => $category->category_name,
+        ]));
+        $account->setAttribute('root_category', [
+            'id' => $rootCategory->id,
+            'name' => $rootCategory->category_name,
+        ]);
+        $account->setAttribute('category_tree', $categoryTree);
+
+        return $account;
     }
 
     protected function attachBalances($accounts, int $year, int $month)
