@@ -14,6 +14,7 @@ use ESolution\LaravelAccounting\Services\GeneralLedgerService;
 use ESolution\LaravelAccounting\Services\JournalService;
 use ESolution\LaravelAccounting\Services\MappingService;
 use ESolution\LaravelAccounting\Services\ReportService;
+use ESolution\LaravelAccounting\Services\ProfitLossSummaryService;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Repositories\FiscalPeriodRepository;
@@ -27,6 +28,7 @@ use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\ServiceAccountTemplateRegistry;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
+use ESolution\LaravelAccounting\Support\ProfitLossSummaryCalculator;
 use ESolution\LaravelAccounting\Http\Middleware\HandleAccountingApiExceptions;
 use ESolution\LaravelAccounting\Services\ServiceManagementService;
 use Illuminate\Support\ServiceProvider;
@@ -165,6 +167,14 @@ class AccountingServiceProvider extends ServiceProvider
                 $app->make(TenantReportRunner::class),
                 $app->make(AccountCategoryRepository::class),
                 $app->make(AccountRepository::class)
+            );
+        });
+
+        $this->app->singleton(ProfitLossSummaryCalculator::class, fn () => new ProfitLossSummaryCalculator);
+        $this->app->singleton(ProfitLossSummaryService::class, function ($app) {
+            return new ProfitLossSummaryService(
+                $app->make(ReportService::class),
+                $app->make(ProfitLossSummaryCalculator::class)
             );
         });
 

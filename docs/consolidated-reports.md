@@ -1,6 +1,6 @@
 # Arithmetic consolidated reports
 
-`ESolution\LaravelAccounting\Services\ConsolidatedReportService` produces one profit/loss or balance-sheet report from selected tenants. It is a separate container-bound service. Existing `ReportService` methods, per-tenant results, facade behavior, and HTTP endpoints are unchanged; no consolidation endpoint is registered.
+`ESolution\LaravelAccounting\Services\ConsolidatedReportService` produces one profit/loss or balance-sheet report, or a consolidated profit/loss summary, from selected tenants. It is a separate container-bound service. Existing `ReportService` methods, per-tenant results, facade behavior, and HTTP endpoints are unchanged; no consolidation endpoint is registered.
 
 ## Usage
 
@@ -11,15 +11,18 @@ $consolidated = app(ConsolidatedReportService::class);
 
 $profitLoss = $consolidated->profitLoss(2026, 7, ['tenant-a', 'tenant-b']);
 $balanceSheet = $consolidated->balanceSheet(2026, 7, ['tenant-a', 'tenant-b']);
+$summary = $consolidated->profitLossSummary(2026, 7, ['tenant-a', 'tenant-b']);
 ```
 
-Both methods require `(year, month, array $tenantIds)` and return an array with:
+All three methods require `(year, month, array $tenantIds)`. `profitLoss()` and `balanceSheet()` return an array with:
 
 | Field | Meaning |
 | --- | --- |
 | `tenant_ids` | Deduplicated canonical tenant primary keys, serialized as strings, in first-resolved order |
 | `period` | Integer `year` and `month` |
 | `report` | Consolidated category/account trees plus `net_income` for profit/loss or asset/liability/equity totals for balance sheet |
+
+`profitLossSummary()` reuses `profitLoss()` and the shared summary calculator to return `{tenant_ids, period, summary}` with classified components, net sales, gross profit, operating profit, and net profit. See [summary classifications and output](./profit-loss-summaries.md). It does not change either report method's payload.
 
 Year must be an integer >= 1 and month must be an integer from 1 to 12. The tenant list must be nonempty and sequential; null/scalar entries, nested arrays, blank IDs, unresolved tenants, and associative lists are rejected through the existing `TenantReportRunner` validation. Duplicate IDs and route-key aliases resolving to one tenant are counted once.
 

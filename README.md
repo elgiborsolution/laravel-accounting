@@ -401,6 +401,8 @@ Profit/loss and balance sheet also accept an optional third argument containing 
 
 For arithmetic consolidation, use the separate `ConsolidatedReportService`: `app(ConsolidatedReportService::class)->profitLoss(2026, 7, ['tenant-a', 'tenant-b'])` (import `ESolution\LaravelAccounting\Services\ConsolidatedReportService`). It returns selected tenant IDs, period, and one merged report aligned by stable category/account codes. See [consolidated reports](./docs/consolidated-reports.md) for compatibility checks, calculation rules, and output examples. Existing per-tenant APIs continue to return separate reports.
 
+For Net Sales, Gross Profit, Operating Profit, and Net Profit, use `ProfitLossSummaryService::summarize($year, $month, $tenantIds)` for separate results or `ConsolidatedReportService::profitLossSummary(...)` for a consolidated summary, under the package's `Services` namespace. Both use configurable account/category code classifications, with account overrides taking precedence; generic tax account `5210` remains operating expense unless explicitly mapped to income tax. The mappings are editable arrays under `profit_loss_summary` in the host's published `config/accounting.php` (`accounting-config` publish tag); rebuild `php artisan config:cache` after editing. See [summary service usage and output](./docs/profit-loss-summaries.md).
+
 ## Default ERP Accounting Services
 
 `DefaultAccountingServicesSeeder` seeds `acc_services` with a standard ERP-ready service catalog. The seeder is idempotent and uses `updateOrCreate()` so rerunning seeds updates definitions without creating duplicates.

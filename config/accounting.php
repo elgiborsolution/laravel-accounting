@@ -49,6 +49,25 @@ return [
         'number_format' => 'JV/{YEAR}/{MONTH}/{SEQ}',
     ],
 
+    // Stable code => summary component. Account overrides win over the nearest
+    // mapped ancestor category. Generic tax account 5210 remains operating
+    // expense unless the host explicitly maps it to income_tax.
+    'profit_loss_summary' => [
+        'account_mappings' => [
+            '5210' => 'operating_expenses',
+            '5601' => 'sales_discounts',
+            '5701' => 'sales_returns',
+        ],
+        'category_mappings' => [
+            'SALES_REVENUE' => 'sales_revenue',
+            'SERVICE_REVENUE' => 'sales_revenue',
+            'COST_OF_GOODS_SOLD' => 'cogs',
+            'OPERATING_EXPENSE' => 'operating_expenses',
+            'OTHER_REVENUE' => 'non_operating_income',
+            'OTHER_EXPENSE' => 'non_operating_expenses',
+        ],
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Fiscal Settings

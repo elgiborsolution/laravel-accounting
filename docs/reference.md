@@ -339,7 +339,11 @@ Rules: financial reports use monthly balances on the resolved transaction connec
 
 ### `ConsolidatedReportService`
 
-Resolve `ESolution\LaravelAccounting\Services\ConsolidatedReportService` from the container or inject it. `profitLoss($year, $month, array $tenantIds)` and `balanceSheet($year, $month, array $tenantIds)` require a nonempty valid tenant list and return `{tenant_ids, period: {year, month}, report}`. Each tenant's existing report runs in its own context; amounts are then merged by stable category/account codes with explicit compatibility checks and rebuilt subtotals. This service performs arithmetic consolidation without intercompany eliminations and does not change existing report/API responses or register an endpoint. See [service usage and output](./consolidated-reports.md).
+Resolve `ESolution\LaravelAccounting\Services\ConsolidatedReportService` from the container or inject it. `profitLoss($year, $month, array $tenantIds)` and `balanceSheet($year, $month, array $tenantIds)` require a nonempty valid tenant list and return `{tenant_ids, period: {year, month}, report}`. `profitLossSummary($year, $month, array $tenantIds)` reuses the profit/loss path and shared classification calculator to return `{tenant_ids, period, summary}`. Each tenant's existing report runs in its own context; amounts are then merged by stable category/account codes with explicit compatibility checks and rebuilt subtotals. This service performs arithmetic consolidation without intercompany eliminations and does not change existing report/API responses or register an endpoint. See [service usage and output](./consolidated-reports.md).
+
+### Profit/loss summary services
+
+`ESolution\LaravelAccounting\Services\ProfitLossSummaryService::summarize($year, $month, array $tenantIds)` returns `{tenant_ids, period, summaries: [{tenant_id, summary}, ...]}`. `ConsolidatedReportService::profitLossSummary(...)` returns `{tenant_ids, period, summary}`. Both reuse existing reporting/tenancy paths and the same `ProfitLossSummaryCalculator`; summary components are classified by configurable stable codes under `accounting.profit_loss_summary`. Account rules override category/ancestor rules. Account `5210` defaults to operating expense; income tax requires an explicit mapping. Existing report/API payloads are unchanged. See [formulas, mappings, service usage, and examples](./profit-loss-summaries.md).
 
 ## Support Registries
 

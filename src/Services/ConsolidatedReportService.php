@@ -5,6 +5,7 @@ namespace ESolution\LaravelAccounting\Services;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
+use ESolution\LaravelAccounting\Support\ProfitLossSummaryCalculator;
 use Illuminate\Validation\ValidationException;
 
 class ConsolidatedReportService
@@ -24,6 +25,20 @@ class ConsolidatedReportService
     public function balanceSheet($year, $month, array $tenantIds): array
     {
         return $this->consolidate('balanceSheet', ['asset' => 'ASSET', 'liability' => 'LIABILITY', 'equity' => 'EQUITY'], $year, $month, $tenantIds);
+    }
+
+    public function profitLossSummary($year, $month, array $tenantIds): array
+    {
+        $calculator = app(ProfitLossSummaryCalculator::class);
+        $period = $calculator->period($year, $month);
+        $mappings = $calculator->mappings();
+        $report = $this->profitLoss($period['year'], $period['month'], $tenantIds);
+
+        return [
+            'tenant_ids' => $report['tenant_ids'],
+            'period' => $period,
+            'summary' => $calculator->calculate($report['report'], $mappings),
+        ];
     }
 
     protected function consolidate(string $method, array $groups, $year, $month, array $tenantIds): array
