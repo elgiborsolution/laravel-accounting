@@ -319,15 +319,16 @@ Rules: closing rejects already-closed periods and unbalanced posted journals; en
 
 File: [`src/Services/GeneralLedgerService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/GeneralLedgerService.php)
 
-Purpose: monthly General Ledger summary and journal-detail source of truth.
+Purpose: monthly General Ledger summary, journal-detail source of truth, and one account's period activity across selected tenants.
 
-Dependencies: `AccountRepository`, `AccountCategoryRepository`, `AccountBalanceService`, `AccountingConnectionResolver`, `AccountingTableResolver`, `GeneralLedgerPaginator`.
+Dependencies: `AccountRepository`, `AccountCategoryRepository`, `AccountBalanceService`, `AccountingConnectionResolver`, `AccountingTableResolver`, `GeneralLedgerPaginator`; `getAccountBreakdown()` resolves the existing `TenantReportRunner` from the container. The constructor is unchanged.
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
 | `getLedger(string $accountId, int $year, int $month)` | All required | `array` | Returns account, period, opening balance, total debit, total credit, and ending balance. It does not return `details`. |
 | `getLedgerDetails(string $accountId, int $year, int $month, string\|int\|null $tenant = null, ?int $page = null, ?int $perPage = null)` | Account/year/month required; tenant/page/per-page optional | `GeneralLedgerPaginator` | Returns native paginator fields plus complete-period General Ledger summary. |
 | `getDetails(string $accountId, string $startDate, string $endDate, float $openingBalance, bool $isDebitNormal)` | All required | `array` | Loads posted movements and calculates running ending balance per row. |
+| `getAccountBreakdown(string $accountCode, string $startDate, string $endDate, array $tenantIds): array` | Nonblank account code, inclusive `Y-m-d` dates, and nonempty valid tenant list; all required | `array` | Returns `{account, period, tenant_ids, tenants, totals, calculation_basis}`. Resolves the code in each tenant and calculates posted period activity, excluding opening journals. Includes existing accounts with zero activity; missing accounts or incompatible D/K classifications raise validation errors. |
 
 General Ledger rules:
 
@@ -346,6 +347,52 @@ use ESolution\LaravelAccounting\Services\GeneralLedgerService;
 
 $summary = app(GeneralLedgerService::class)->getLedger($accountId, 2026, 7);
 $details = app(GeneralLedgerService::class)->getLedgerDetails($accountId, 2026, 7, null, 2, 20);
+```
+
+Account breakdown rules:
+
+- The account code is resolved independently through `AccountRepository::findByCode()` inside each selected tenant, allowing different UUIDs. Codes remain strings, preserving leading zeros. Like the existing ledger lookup, resolution is unscoped by master-account ownership; tenant selection does not introduce an ownership filter.
+- Dates must be complete calendar dates in `Y-m-d` format with start <= end. Both boundaries are inclusive, including single-day, cross-year and leap-day selections. Invalid account/date inputs fail before tenant execution.
+- The existing tenant runner validates the whole nonempty list, resolves primary/route keys, deduplicates IDs and aliases, and preserves first-selected order. Results contain canonical string tenant IDs. Invalid tenants are never skipped. Shared-master and tenant-local master configurations, connection/table prefixes, and explicit repository/resolver overrides remain effective.
+- `account` contains `code`, `name`, `category: {category_code, category_name, type}`, and `normal_balance` (`D` or `K`). Names/category metadata come from the first selected tenant. Assets/expenses are debit-normal; liabilities/equity/revenue are credit-normal. Different names or category types are allowed when their normal balance agrees; opposing D/K classifications are rejected under `normal_balance`. Missing or unknown categories also fail instead of assuming a classification.
+- `tenants` contains `{tenant_id, total_debit, total_credit, net_amount, balance_side}` for each selected tenant. An existing account without qualifying activity returns zero amounts and a null side. Missing accounts fail the whole result under `account_code`, with a message for each affected tenant; no partial overall totals or misleading zero rows are returned.
+- Amounts represent period activity only. The query sums posted journal details on each resolved transaction connection, excludes drafts/other non-posted statuses, out-of-range dates, `OPENING_BALANCE`, and `AccountOpeningBalanceService::SOURCE_TYPE` (`ACCOUNT_OPENING_BALANCE`). Opening-source reversals are excluded too. Ordinary null-source journals and posted signed reversal effects are included. No snapshots, opening/ending balances or closed fiscal periods are read or required.
+- `calculation_basis` is `debit_minus_credit` for debit-normal accounts, or `credit_minus_debit` for credit-normal accounts. Per-tenant and overall `net_amount` use that basis; negative values are preserved. Amounts are rounded to two decimals. `totals` sums tenant debits/credits and calculates net on the same basis, without adding another balance or subtotal.
+- `balance_side` is determined independently from actual totals: `D` when debit > credit, `K` when credit > debit, and null when equal, including equal nonzero activity. Thus a debit-normal account with debits 150 and credits 230 has `net_amount: -80` and side `K`; a credit-normal account with debits 300 and credits 100 has `net_amount: -200` and side `D`.
+- The runner restores previous tenancy and the original default connection in nested `finally` blocks, including initialization/query failures. Missing-account/classification validation and overall aggregation occur after restoration. This method introduces no cache, cross-database joins, API wiring or changes to existing ledger methods.
+
+Example:
+
+```php
+$breakdown = app(GeneralLedgerService::class)->getAccountBreakdown(
+    '1001', '2026-07-01', '2026-07-31', ['tenant-a', 'tenant-b', 'tenant-c', 'tenant-a']
+);
+```
+
+Example response:
+
+```json
+{
+  "account": {
+    "code": "1001",
+    "name": "Cash",
+    "category": {
+      "category_code": "CURRENT_ASSET",
+      "category_name": "Current Asset",
+      "type": "ASSET"
+    },
+    "normal_balance": "D"
+  },
+  "period": {"start_date": "2026-07-01", "end_date": "2026-07-31"},
+  "tenant_ids": ["tenant-a", "tenant-b", "tenant-c"],
+  "tenants": [
+    {"tenant_id": "tenant-a", "total_debit": 150, "total_credit": 230, "net_amount": -80, "balance_side": "K"},
+    {"tenant_id": "tenant-b", "total_debit": 400, "total_credit": 50, "net_amount": 350, "balance_side": "D"},
+    {"tenant_id": "tenant-c", "total_debit": 0, "total_credit": 0, "net_amount": 0, "balance_side": null}
+  ],
+  "totals": {"total_debit": 550, "total_credit": 280, "net_amount": 270},
+  "calculation_basis": "debit_minus_credit"
+}
 ```
 
 ### `ReportService`

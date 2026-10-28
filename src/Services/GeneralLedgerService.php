@@ -8,9 +8,11 @@ use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\GeneralLedgerPaginator;
+use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use RuntimeException;
 
 class GeneralLedgerService
@@ -133,6 +135,119 @@ class GeneralLedgerService
                 'ending_balance' => round($runningBalance, 2),
             ];
         })->all();
+    }
+
+    /**
+     * Inspect period activity for the same account code in each selected tenant.
+     * Missing accounts are errors, rather than zero-activity ledger balances.
+     */
+    public function getAccountBreakdown(string $accountCode, string $startDate, string $endDate, array $tenantIds): array
+    {
+        validator(['account_code' => $accountCode, 'start_date' => $startDate, 'end_date' => $endDate], [
+            'account_code' => ['required', 'string'],
+            'start_date' => ['required', 'date_format:Y-m-d'],
+            'end_date' => ['required', 'date_format:Y-m-d', 'after_or_equal:start_date'],
+        ])->validate();
+
+        $sources = app(TenantReportRunner::class)->run($tenantIds, function () use ($accountCode, $startDate, $endDate) {
+            $account = $this->accounts->findByCode($accountCode);
+            if (! $account) {
+                return ['error' => 'missing_account'];
+            }
+            $category = $this->categories->findById($account->category_id);
+            $type = strtoupper((string) $category?->type);
+            if (! in_array($type, ['ASSET', 'EXPENSE', 'LIABILITY', 'EQUITY', 'REVENUE'], true)) {
+                return ['error' => 'unknown_normal_balance'];
+            }
+            $debitNormal = $this->isDebitNormal($type);
+
+            return [
+                'account' => [
+                    'code' => $account->code,
+                    'name' => $account->name,
+                    'category' => [
+                        'category_code' => $category->category_code,
+                        'category_name' => $category->category_name,
+                        'type' => $type,
+                    ],
+                    'normal_balance' => $debitNormal ? 'D' : 'K',
+                ],
+                'amounts' => $this->accountActivityTotals($account->id, $startDate, $endDate, $debitNormal),
+            ];
+        });
+
+        // The runner has restored the caller context before metadata checks or
+        // aggregation can raise an error. Never return incomplete overall totals.
+        $account = null;
+        $errors = [];
+        $tenants = [];
+        foreach ($sources as $source) {
+            $tenantId = $source['tenant_id'];
+            $result = $source['report'];
+            if (($result['error'] ?? null) === 'missing_account') {
+                $errors['account_code'][] = 'Account ['.$accountCode.'] was not found in tenant ['.$tenantId.'].';
+                continue;
+            }
+            if (($result['error'] ?? null) === 'unknown_normal_balance') {
+                $errors['normal_balance'][] = 'Account ['.$accountCode.'] has an unresolved normal-balance classification in tenant ['.$tenantId.'].';
+                continue;
+            }
+            $account ??= $result['account'];
+            if ($result['account']['normal_balance'] !== $account['normal_balance']) {
+                $errors['normal_balance'][] = 'Account ['.$accountCode.'] has an incompatible normal balance in tenant ['.$tenantId.'].';
+            }
+            $tenants[] = ['tenant_id' => $tenantId] + $result['amounts'];
+        }
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+
+        $debit = round(array_sum(array_column($tenants, 'total_debit')), 2);
+        $credit = round(array_sum(array_column($tenants, 'total_credit')), 2);
+        $debitNormal = $account['normal_balance'] === 'D';
+
+        return [
+            'account' => $account,
+            'period' => ['start_date' => $startDate, 'end_date' => $endDate],
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'tenants' => $tenants,
+            'totals' => [
+                'total_debit' => $debit,
+                'total_credit' => $credit,
+                'net_amount' => round($this->balances->applyMovement(0.0, $debit, $credit, $debitNormal), 2),
+            ],
+            'calculation_basis' => $debitNormal ? 'debit_minus_credit' : 'credit_minus_debit',
+        ];
+    }
+
+    protected function accountActivityTotals(string $accountId, string $startDate, string $endDate, bool $debitNormal): array
+    {
+        $connection = DB::connection($this->connections->resolveTransactionDataConnection());
+        $details = $this->tables->table('journal_entry_details');
+        $journals = $this->tables->table('journal_entries');
+        $grammar = $connection->getQueryGrammar();
+        $totals = $connection->table($details)
+            ->join($journals, $journals.'.id', '=', $details.'.journal_entry_id')
+            ->where($details.'.account_id', $accountId)
+            ->whereDate($journals.'.trx_date', '>=', $startDate)
+            ->whereDate($journals.'.trx_date', '<=', $endDate)
+            ->where($journals.'.status', JournalStatus::POSTED->value)
+            ->where(function ($query) use ($journals) {
+                $query->whereNull($journals.'.source_type')
+                    ->orWhereNotIn($journals.'.source_type', ['OPENING_BALANCE', AccountOpeningBalanceService::SOURCE_TYPE]);
+            })
+            ->selectRaw('SUM('.$grammar->wrap($details.'.debit').') as total_debit')
+            ->selectRaw('SUM('.$grammar->wrap($details.'.credit').') as total_credit')
+            ->first();
+        $debit = round((float) ($totals->total_debit ?? 0), 2);
+        $credit = round((float) ($totals->total_credit ?? 0), 2);
+
+        return [
+            'total_debit' => $debit,
+            'total_credit' => $credit,
+            'net_amount' => round($this->balances->applyMovement(0.0, $debit, $credit, $debitNormal), 2),
+            'balance_side' => $debit > $credit ? 'D' : ($credit > $debit ? 'K' : null),
+        ];
     }
 
     protected function resolveLedger(string $accountId, int $year, int $month): array
