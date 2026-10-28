@@ -107,18 +107,48 @@ Dependencies: `ServiceCatalog`, `ServiceRepository`, Laravel container.
 
 File: [`src/Services/AccountCategoryTreeService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/AccountCategoryTreeService.php)
 
-Purpose: reads and transforms the account-category hierarchy, with posting accounts grouped below their category.
+Purpose: reads and transforms the account-category hierarchy and retrieves filtered category items, optionally consolidated across selected tenants.
 
-Dependencies: `AccountCategoryRepository`, `AccountRepository`.
+Dependencies: constructor-injected `AccountCategoryRepository`, `AccountRepository`; `index()` resolves `AccountBalanceService` and `ConsolidatedReportService` from the Laravel container and uses the existing `AccountCategoryResource` for flat items.
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
+| `index(array $filters = [], ?array $tenantIds = null)` | Optional retrieval filters and optional nonempty tenant list; list also accepted as `$filters['tenant_ids']` | `Collection\|LengthAwarePaginator` | Returns category arrays using the category API's existing filtering, relationships, hierarchy, ordering and pagination conventions. Omission uses the active connection; a list returns one consolidated result. This PHP method is not connected to the existing API. |
 | `getCategories()` | None | `Collection<AccountCategory>` | Returns ordered categories. |
 | `getTree(?Collection $categories = null, ?Collection $accounts = null)` | Optional preloaded collections | `Collection` | Builds the category tree; loads collections when omitted. |
 | `buildNode(AccountCategory $category, ?Collection $categories = null, ?Collection $accounts = null)` | Category required; collections optional | `array` | Returns one complete tree node or an empty array. |
 | `getDescendants(AccountCategory $category)` | Category required | `Collection<AccountCategory>` | Returns recursive descendants. |
 | `buildPath(AccountCategory $category)` | Category required | `array` | Returns lineage category names. |
 | `flatten(Collection $tree)` | Tree required | `Collection` | Recursively flattens tree nodes. |
+
+Retrieval options and rules:
+
+- Supported filters: `type`, `parent_id`, `root_only`, `has_accounts`, `search`, `with`, `year`, `month`, `page`, `per_page`. `with` accepts a comma-separated string or array containing `children`, `accounts`, `balance`; other options are ignored. `type` is case-insensitive and validated against available source category types. Year/month default to the current year/month and are used for balances; the existing category retrieval period coercion is retained.
+- Without a tenant list, `index()` reads the active connection without switching tenancy. Account visibility follows the existing active tenancy, `X-Tenant`, then tenant-route identifier precedence: central accounts plus that tenant's accounts, or only central accounts without an identity. Existing UUIDs and flat/tree item fields are retained. The service does not initialize a tenant from a request header or route.
+- With a tenant list, `ConsolidatedReportService::categoryTree()` uses the existing tenant runner to validate all primary/route keys before executing source reads, deduplicate IDs/aliases, and initialize each selected tenant. Empty, malformed, non-list and unresolved lists fail with `ValidationException`. An explicit null list inside `$filters` is invalid; a null second PHP argument preserves current-context retrieval. When both forms are supplied, a non-null second argument selects the tenants after validating the list shape in the filters.
+- Each source chart and its visible account balances are read in that tenant's database context. Categories align by exact `category_code`, accounts by exact `code`, preserving case and leading zeros. Corresponding balances are summed once per account per source; category totals are rebuilt from direct accounts and descendants. Accounts/branches present in only some tenants remain. Existing consolidation definition checks reject incompatible parent/category codes, types, names, report types, status or postable flags. Unreachable source branches fail explicitly.
+- Consolidated category `id` and `parent_id` contain category codes; account `id` and `category_id` contain account/category codes. These identifiers describe read-only merged items and are not database UUIDs. `parent_id` accepts a stable category code or a category UUID from any selected tenant; aliases matching multiple codes are rejected. Categories use the first selected occurrence's sequence, then name/code order; accounts sort lexically by code. Descriptions use the first selected occurrence.
+- Filters apply to the merged chart before pagination. `parent_id` selects direct children and takes precedence over `root_only`; `with=children` starts at roots otherwise. Search matches category code/name and account code/name, retaining necessary ancestors. Returned account relations contain matching accounts only; balances include all visible accounts in the retained categories, matching existing category retrieval behavior. `has_accounts` retains branches containing visible accounts.
+- With no pagination options, returns a `Collection` of category arrays, without an HTTP envelope. Flat items include `id`, `category_code`, `category_name`, `type`, `parent_id`, `sequence_no`, `is_active`, plus requested `accounts`/scalar `balance`. Tree items retain the existing `report_type`, `status`, `path`, recursive `children`, and requested `accounts`/`balance` fields. Account balances are scalar ending balances.
+- Presence of `page` or `per_page` returns a native `LengthAwarePaginator` of those items. Defaults: page 1, per-page 15, minimum 1. Counts and slicing apply to filtered top-level items, with complete subtrees attached. The service introduces no cache and no API wiring or response changes.
+- Balances reuse `AccountBalanceService` and its monthly snapshot/live fallback. Existing shared-master, tenant-local master, single-database and explicit model/repository connection overrides remain effective. Explicit-list iteration restores original tenancy and the original default connection in nested `finally` blocks, including query/initialization failures. Filtering/merging errors occur after restoration. No cross-database join is used.
+
+Example:
+
+```php
+use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
+
+$categories = app(AccountCategoryTreeService::class);
+$current = $categories->index(['with' => 'children,accounts,balance', 'year' => 2026, 'month' => 7]);
+$merged = $categories->index([
+    'with' => ['children', 'accounts', 'balance'], 'year' => 2026, 'month' => 7,
+], ['tenant-a', 'tenant-b', 'tenant-a']);
+$page = $categories->index([
+    'tenant_ids' => ['tenant-a', 'tenant-b'], 'parent_id' => 'ASSET', 'per_page' => 10,
+]);
+// $merged is one chart. Matching account balances 100 and 200 become 300.
+// $page->items() contains direct children of ASSET; $page->total() counts them.
+```
 
 ### `AccountBalanceService`
 
@@ -376,26 +406,28 @@ See [per-tenant request/response examples](./tenant-financial-reports.md).
 
 File: [`src/Services/ConsolidatedReportService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ConsolidatedReportService.php)
 
-Purpose: arithmetic consolidation of profit/loss and balance-sheet reports, plus a consolidated profit/loss summary using the existing classification calculator.
+Purpose: arithmetic consolidation of profit/loss and balance-sheet reports, a consolidated profit/loss summary, and category charts for service retrieval.
 
-Dependencies: constructor-injected `ReportService`, `TenantReportRunner`, `AccountCategoryRepository`, and `AccountRepository`; `profitLossSummary()` resolves `ProfitLossSummaryCalculator` from the Laravel container. The existing four-argument constructor is unchanged.
+Dependencies: constructor-injected `ReportService`, `TenantReportRunner`, `AccountCategoryRepository`, and `AccountRepository`; `profitLossSummary()` resolves `ProfitLossSummaryCalculator` and `categoryTree()` resolves `AccountBalanceService` from the Laravel container. The existing four-argument constructor is unchanged.
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
 | `profitLoss($year, $month, array $tenantIds): array` | All required; year integer >= 1, month 1..12, nonempty valid tenant list | `array` | Returns `{tenant_ids, period: {year, month}, report: {data: {revenue, expense}, net_income}}` with amounts combined across selected tenants. |
 | `balanceSheet($year, $month, array $tenantIds): array` | All required; year integer >= 1, month 1..12, nonempty valid tenant list | `array` | Returns `{tenant_ids, period: {year, month}, report: {data: {asset, liability, equity}, total_assets, total_liabilities, total_equity}}`. |
 | `profitLossSummary($year, $month, array $tenantIds): array` | All required; same period/list requirements | `array` | Calls `profitLoss()` and applies the shared summary classifications/formulas. Returns `{tenant_ids, period: {year, month}, summary}`; it does not replace or alter the ordinary report payload. |
+| `categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array` | Required nonempty valid tenant list; optional balance period and inclusion flag | `array` | Returns `{tenant_ids, data: [category nodes], category_aliases: {source_uuid: [category_codes]}}`. Merges full visible charts before `AccountCategoryTreeService::index()` applies filters and pagination. Defaults to metadata only; balance periods default through `AccountBalanceService`. |
 
 Consolidation rules:
 
-- There is no current-tenant/default-list shortcut: `$tenantIds` is required and cannot be empty. Tenant validation, deduplication, initialization, and `finally` restoration follow the `ReportService` tenant-list rules above. Returned period values are normalized to integers; there is no default year or month.
+- There is no current-tenant/default-list shortcut: `$tenantIds` is required and cannot be empty. Tenant validation, deduplication, initialization, and `finally` restoration follow the `ReportService` tenant-list rules above. Financial report/summary period values are normalized to integers; those methods require year and month.
 - Each tenant's ordinary report and metadata are materialized in its own context. After the runner restores the caller context, consolidation aligns categories by `category_code` and accounts by `code`, not UUID. Codes are exact strings, including case and leading zeros. Categories/accounts absent from some tenants are included from the others.
 - Matching category definitions must agree on parent **code**, type, category name, report type, and status. Matching account definitions must agree on category **code**, name, postable flag, and status. Every occurrence of a participating code is checked, including when another tenant places it outside the requested report. Unrelated codes outside the requested report are not compared.
 - Definition conflicts throw `ValidationException` under `consolidation`, naming the code, incompatible field, and tenant. Invalid hierarchy references, duplicate source category/account occurrences, and invalid account balances also fail explicitly.
 - Only corresponding account balances are summed. Category balances are rebuilt from direct accounts plus immediate child subtotals; report totals use root subtotals only. Original category/report totals are not added again. Signed values are retained and sums are rounded to two decimal places.
 - Consolidated category nodes contain `category_code`, `parent_code`, `type`, `category_name`, `report_type`, `status`, `children`, `accounts`, and `balance`. Accounts contain `code`, `category_code`, `name`, `is_postable`, `status`, and `balance`. Database UUID fields are omitted; roots, children, and accounts are sorted by code.
 - `profitLossSummary()` snapshots the configured mappings before calling `profitLoss()`, then calculates from the merged account balances after context restoration. It uses the same summary fields, precedence, sign rules, and formulas documented under `ProfitLossSummaryService` below. Classification errors therefore also leave the caller's tenant/connection restored.
-- This is arithmetic consolidation only: no intercompany eliminations, live-balance fallback, currency conversion, new report cache, or additional HTTP endpoint. Shared/tenant-local master modes and explicit connection overrides continue through the existing report/repository paths.
+- `categoryTree()` reuses code alignment, definition checks and account aggregation, reading central plus tenant-visible accounts through the existing tenancy integration. Its nodes also include `sequence_no` and account `description`; categories follow first-selected-source sequence/name/code ordering. Without `$withBalance`, zero balance placeholders are returned without querying balances. With it, category balances use the existing `AccountBalanceService` snapshot/live fallback. `category_aliases` supports parent UUID lookup; use `AccountCategoryTreeService::index()` for filtered, API-shaped items with code-based IDs.
+- This is arithmetic consolidation only: no intercompany eliminations, currency conversion, new report cache, or additional HTTP endpoint. The category methods are PHP service entry points only. Existing financial report responses and snapshot-only behavior are preserved, as are shared/tenant-local master modes and explicit connection overrides.
 
 Example:
 
@@ -406,6 +438,7 @@ $reports = app(ConsolidatedReportService::class);
 $profitLoss = $reports->profitLoss(2026, 7, ['tenant-a', 'tenant-b']);
 $balanceSheet = $reports->balanceSheet(2026, 7, ['tenant-a', 'tenant-b']);
 $summary = $reports->profitLossSummary(2026, 7, ['tenant-a', 'tenant-b']);
+$chart = $reports->categoryTree(['tenant-a', 'tenant-b'], 2026, 7, true);
 // $summary['tenant_ids'], $summary['period'], $summary['summary']['net_profit']
 ```
 

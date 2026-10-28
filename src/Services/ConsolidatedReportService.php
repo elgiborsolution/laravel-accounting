@@ -4,8 +4,10 @@ namespace ESolution\LaravelAccounting\Services;
 
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
-use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use ESolution\LaravelAccounting\Support\ProfitLossSummaryCalculator;
+use ESolution\LaravelAccounting\Support\TenantReportRunner;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
 class ConsolidatedReportService
@@ -41,6 +43,87 @@ class ConsolidatedReportService
         ];
     }
 
+    /**
+     * Merge the visible chart before category filters and pagination are applied.
+     */
+    public function categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array
+    {
+        $sources = $this->tenants->run($tenantIds, function () use ($year, $month, $withBalance) {
+            $tenantId = $this->categoryTenantIdentifier();
+            $categories = $this->categories->allOrdered();
+            $accounts = $this->accounts->visibleOrdered($tenantId);
+            $balances = $withBalance
+                ? app(AccountBalanceService::class)->getBalances($accounts->pluck('id')->all(), $year, $month)
+                : collect();
+            $ordering = [];
+            $aliases = [];
+            $descriptions = [];
+            foreach ($categories as $category) {
+                $ordering['category:'.$category->category_code] = (int) $category->sequence_no;
+                $aliases[(string) $category->id] = (string) $category->category_code;
+            }
+            foreach ($accounts as $account) {
+                $account->setAttribute('balance', (float) data_get($balances->get($account->id), 'ending_balance', 0));
+                $descriptions['account:'.$account->code] = $account->description;
+            }
+
+            return [
+                'payload' => ['data' => ['categories' => $this->categories->buildTree($categories, $accounts)->all()]],
+                'definitions' => $this->definitionsFor($categories, $accounts),
+                'ordering' => $ordering,
+                'aliases' => $aliases,
+                'descriptions' => $descriptions,
+            ];
+        });
+
+        $ordering = [];
+        $aliases = [];
+        $descriptions = [];
+        foreach ($sources as $source) {
+            foreach ($source['report']['ordering'] as $code => $sequence) {
+                $ordering[$code] ??= $sequence;
+            }
+            foreach ($source['report']['aliases'] as $id => $code) {
+                $aliases[$id] = array_values(array_unique(array_merge($aliases[$id] ?? [], [$code])));
+            }
+            foreach ($source['report']['descriptions'] as $code => $description) {
+                if (! array_key_exists($code, $descriptions)) {
+                    $descriptions[$code] = $description;
+                }
+            }
+        }
+        $data = $this->mergeSources($sources, ['categories' => null], $ordering);
+        $decorate = function (array $nodes) use (&$decorate, $ordering, $descriptions): array {
+            return array_map(function (array $node) use ($decorate, $ordering, $descriptions) {
+                $node['sequence_no'] = $ordering['category:'.$node['category_code']] ?? 0;
+                $node['accounts'] = array_map(function (array $account) use ($descriptions) {
+                    return $account + ['description' => $descriptions['account:'.$account['code']] ?? null];
+                }, $node['accounts']);
+                $node['children'] = $decorate($node['children']);
+
+                return $node;
+            }, $nodes);
+        };
+
+        return [
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'data' => $decorate($data['categories']),
+            'category_aliases' => $aliases,
+        ];
+    }
+
+    protected function categoryTenantIdentifier(): string
+    {
+        if (! function_exists('tenancy') || ! (tenancy()->initialized ?? false)
+            || ! ((tenancy()->tenant ?? null) instanceof Model)) {
+            throw ValidationException::withMessages([
+                'tenant_ids' => ['Category consolidation requires an initialized tenancy integration.'],
+            ]);
+        }
+
+        return (string) tenancy()->tenant->getKey();
+    }
+
     protected function consolidate(string $method, array $groups, $year, $month, array $tenantIds): array
     {
         validator(['year' => $year, 'month' => $month], [
@@ -57,55 +140,7 @@ class ConsolidatedReportService
             ];
         });
 
-        $categories = [];
-        $accounts = [];
-        $balances = [];
-        foreach ($sources as $source) {
-            $seenCategories = [];
-            $seenAccounts = [];
-            foreach ($groups as $group => $type) {
-                foreach ($source['report']['payload']['data'][$group] as $node) {
-                    $this->collectNode(
-                        $node, null, $source, $type,
-                        $categories, $accounts, $balances, $seenCategories, $seenAccounts
-                    );
-                }
-            }
-        }
-
-        // Check every occurrence of a participating code, even if another
-        // tenant classifies it outside the requested report. Absence is valid.
-        foreach ($sources as $source) {
-            foreach (['categories' => $categories, 'accounts' => $accounts] as $kind => $definitions) {
-                foreach ($definitions as $key => $definition) {
-                    if (isset($source['report']['definitions'][$kind][$key])) {
-                        $this->assertCompatible($kind, $definition, $source['report']['definitions'][$kind][$key], $source['tenant_id']);
-                    }
-                }
-            }
-        }
-
-        uasort($categories, fn (array $a, array $b) => strcmp($a['category_code'], $b['category_code']));
-        uasort($accounts, fn (array $a, array $b) => strcmp($a['code'], $b['code']));
-        $children = [];
-        $accountsByCategory = [];
-        foreach ($categories as $definition) {
-            $parent = $definition['parent_code'];
-            $children[$parent === null ? '__root__' : 'category:'.$parent][] = $definition;
-        }
-        foreach ($accounts as $key => $definition) {
-            $accountsByCategory['category:'.$definition['category_code']][] = $definition + ['balance' => $balances[$key]];
-        }
-
-        $data = [];
-        foreach ($groups as $group => $type) {
-            $data[$group] = [];
-            foreach ($children['__root__'] ?? [] as $root) {
-                if ($root['type'] === $type) {
-                    $data[$group][] = $this->buildNode($root, $children, $accountsByCategory);
-                }
-            }
-        }
+        $data = $this->mergeSources($sources, $groups);
 
         $report = ['data' => $data];
         if ($method === 'profitLoss') {
@@ -123,9 +158,87 @@ class ConsolidatedReportService
         ];
     }
 
+    protected function mergeSources(array $sources, array $groups, ?array $ordering = null): array
+    {
+        $categories = [];
+        $accounts = [];
+        $balances = [];
+        foreach ($sources as $source) {
+            $seenCategories = [];
+            $seenAccounts = [];
+            foreach ($groups as $group => $type) {
+                foreach ($source['report']['payload']['data'][$group] as $node) {
+                    $this->collectNode(
+                        $node, null, $source, $type ?? $node['type'],
+                        $categories, $accounts, $balances, $seenCategories, $seenAccounts
+                    );
+                }
+            }
+            if (in_array(null, $groups, true)
+                && (count($seenCategories) !== count($source['report']['definitions']['categories'])
+                    || count($seenAccounts) !== count($source['report']['definitions']['accounts']))) {
+                $this->invalid('The category chart has unreachable categories or accounts in tenant ['.$source['tenant_id'].'].');
+            }
+        }
+
+        // Check every occurrence of a participating code, even if another
+        // tenant classifies it outside the requested report. Absence is valid.
+        foreach ($sources as $source) {
+            foreach (['categories' => $categories, 'accounts' => $accounts] as $kind => $definitions) {
+                foreach ($definitions as $key => $definition) {
+                    if (isset($source['report']['definitions'][$kind][$key])) {
+                        $this->assertCompatible($kind, $definition, $source['report']['definitions'][$kind][$key], $source['tenant_id']);
+                    }
+                }
+            }
+        }
+
+        uasort($categories, function (array $a, array $b) use ($ordering) {
+            if ($ordering !== null) {
+                $sequence = ($ordering['category:'.$a['category_code']] ?? 0) <=> ($ordering['category:'.$b['category_code']] ?? 0);
+                if ($sequence !== 0) {
+                    return $sequence;
+                }
+                $name = strcmp($a['category_name'], $b['category_name']);
+                if ($name !== 0) {
+                    return $name;
+                }
+            }
+
+            return strcmp($a['category_code'], $b['category_code']);
+        });
+        uasort($accounts, fn (array $a, array $b) => strcmp($a['code'], $b['code']));
+        $children = [];
+        $accountsByCategory = [];
+        foreach ($categories as $definition) {
+            $parent = $definition['parent_code'];
+            $children[$parent === null ? '__root__' : 'category:'.$parent][] = $definition;
+        }
+        foreach ($accounts as $key => $definition) {
+            $accountsByCategory['category:'.$definition['category_code']][] = $definition + ['balance' => $balances[$key]];
+        }
+
+        $data = [];
+        foreach ($groups as $group => $type) {
+            $data[$group] = [];
+            foreach ($children['__root__'] ?? [] as $root) {
+                if ($type === null || $root['type'] === $type) {
+                    $data[$group][] = $this->buildNode($root, $children, $accountsByCategory);
+                }
+            }
+        }
+
+        return $data;
+    }
+
     protected function definitions(): array
     {
-        $records = $this->categories->allOrdered()->keyBy('id');
+        return $this->definitionsFor($this->categories->allOrdered(), $this->accounts->allOrdered());
+    }
+
+    protected function definitionsFor(Collection $categoryRecords, Collection $accountRecords): array
+    {
+        $records = $categoryRecords->keyBy('id');
         $categories = [];
         foreach ($records as $record) {
             $code = $this->code($record->category_code, 'category');
@@ -148,7 +261,7 @@ class ConsolidatedReportService
         }
 
         $accounts = [];
-        foreach ($this->accounts->allOrdered() as $record) {
+        foreach ($accountRecords as $record) {
             $code = $this->code($record->code, 'account');
             $category = $records->get($record->category_id);
             if (! $category) {
