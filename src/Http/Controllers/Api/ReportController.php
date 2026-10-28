@@ -80,28 +80,38 @@ class ReportController extends BaseController
 
     public function profitLoss(Request $request)
     {
-        $this->initializeTenantIfNeeded($request->route('tenantId'));
+        if (! $request->has('tenant_ids')) {
+            $this->initializeTenantIfNeeded($request->route('tenantId'));
+        }
 
-        $request->validate([
+        $validated = $request->validate([
             'year' => 'required|integer',
             'month' => 'required|integer|between:1,12',
+            'tenant_ids' => 'sometimes|required|array|list|min:1',
         ]);
 
-        $data = $this->reportService->profitLoss($request->year, $request->month);
+        $data = isset($validated['tenant_ids'])
+            ? $this->reportService->profitLoss($request->year, $request->month, $validated['tenant_ids'])
+            : $this->reportService->profitLoss($request->year, $request->month);
 
         return $this->successResponse('Profit & Loss retrieved successfully', $data);
     }
 
     public function balanceSheet(Request $request)
     {
-        $this->initializeTenantIfNeeded($request->route('tenantId'));
+        if (! $request->has('tenant_ids')) {
+            $this->initializeTenantIfNeeded($request->route('tenantId'));
+        }
 
-        $request->validate([
+        $validated = $request->validate([
             'year' => 'required|integer',
             'month' => 'required|integer|between:1,12',
+            'tenant_ids' => 'sometimes|required|array|list|min:1',
         ]);
 
-        $data = $this->reportService->balanceSheet($request->year, $request->month);
+        $data = isset($validated['tenant_ids'])
+            ? $this->reportService->balanceSheet($request->year, $request->month, $validated['tenant_ids'])
+            : $this->reportService->balanceSheet($request->year, $request->month);
 
         return $this->successResponse('Balance Sheet retrieved successfully', $data);
     }

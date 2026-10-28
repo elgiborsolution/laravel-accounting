@@ -397,6 +397,10 @@ $balanceSheet = $reportService->balanceSheet(2026, 1);
 $cashFlow = $reportService->cashFlow(2026, 1);
 ```
 
+Profit/loss and balance sheet also accept an optional third argument containing tenant IDs. For example, `$reportService->profitLoss(2026, 7, ['tenant-a', 'tenant-b'])` returns separate `{tenant_id, report}` entries. The APIs accept `tenant_ids[]=tenant-a&tenant_ids[]=tenant-b`; omitting the list preserves the existing response. See [tenant financial reports](./docs/tenant-financial-reports.md) for validation, connection behavior, and request/response examples.
+
+For arithmetic consolidation, use the separate `ConsolidatedReportService`: `app(ConsolidatedReportService::class)->profitLoss(2026, 7, ['tenant-a', 'tenant-b'])` (import `ESolution\LaravelAccounting\Services\ConsolidatedReportService`). It returns selected tenant IDs, period, and one merged report aligned by stable category/account codes. See [consolidated reports](./docs/consolidated-reports.md) for compatibility checks, calculation rules, and output examples. Existing per-tenant APIs continue to return separate reports.
+
 ## Default ERP Accounting Services
 
 `DefaultAccountingServicesSeeder` seeds `acc_services` with a standard ERP-ready service catalog. The seeder is idempotent and uses `updateOrCreate()` so rerunning seeds updates definitions without creating duplicates.

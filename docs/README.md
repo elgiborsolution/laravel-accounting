@@ -7,6 +7,8 @@ This documentation is the main technical reference for the package. It now uses 
 - [Technical Design](./technical-design.md)
 - [Package Architecture](./architecture.md)
 - [Public API Reference](./reference.md)
+- [Profit/Loss and Balance Sheet by Tenant](./tenant-financial-reports.md)
+- [Arithmetic Consolidated Reports](./consolidated-reports.md)
 - [Available Services](./services.md)
 - [Hook System](./hooks.md)
 - [Journal Engine](./journal-engine.md)

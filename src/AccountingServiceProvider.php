@@ -8,6 +8,7 @@ use ESolution\LaravelAccounting\Services\AccountOpeningBalanceService;
 use ESolution\LaravelAccounting\Services\AccountingService;
 use ESolution\LaravelAccounting\Services\ClosingService;
 use ESolution\LaravelAccounting\Services\CoaService;
+use ESolution\LaravelAccounting\Services\ConsolidatedReportService;
 use ESolution\LaravelAccounting\Services\FiscalPeriodService;
 use ESolution\LaravelAccounting\Services\GeneralLedgerService;
 use ESolution\LaravelAccounting\Services\JournalService;
@@ -25,6 +26,7 @@ use ESolution\LaravelAccounting\Support\AccountingHookManager;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\ServiceAccountTemplateRegistry;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
+use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use ESolution\LaravelAccounting\Http\Middleware\HandleAccountingApiExceptions;
 use ESolution\LaravelAccounting\Services\ServiceManagementService;
 use Illuminate\Support\ServiceProvider;
@@ -154,6 +156,15 @@ class AccountingServiceProvider extends ServiceProvider
                 $app->make(AccountCategoryRepository::class),
                 $app->make(AccountRepository::class),
                 $app->make(AccountingTableResolver::class)
+            );
+        });
+
+        $this->app->singleton(ConsolidatedReportService::class, function ($app) {
+            return new ConsolidatedReportService(
+                $app->make(ReportService::class),
+                $app->make(TenantReportRunner::class),
+                $app->make(AccountCategoryRepository::class),
+                $app->make(AccountRepository::class)
             );
         });
 

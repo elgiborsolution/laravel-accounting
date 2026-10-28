@@ -7,6 +7,7 @@ use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -94,8 +95,12 @@ class ReportService
      * Profit & Loss Report
      * Menghitung laba/rugi perusahaan.
      */
-    public function profitLoss($year, $month)
+    public function profitLoss($year, $month, ?array $tenantIds = null)
     {
+        if ($tenantIds !== null) {
+            return app(TenantReportRunner::class)->run($tenantIds, fn () => $this->profitLoss($year, $month));
+        }
+
         $tree = $this->buildTreeWithBalances($year, $month);
 
         $revenue = $this->pickRootNodesByType($tree, ['REVENUE']);
@@ -114,8 +119,12 @@ class ReportService
      * Balance Sheet Report
      * Menampilkan posisi keuangan perusahaan.
      */
-    public function balanceSheet($year, $month)
+    public function balanceSheet($year, $month, ?array $tenantIds = null)
     {
+        if ($tenantIds !== null) {
+            return app(TenantReportRunner::class)->run($tenantIds, fn () => $this->balanceSheet($year, $month));
+        }
+
         $tree = $this->buildTreeWithBalances($year, $month);
 
         $asset = $this->pickRootNodesByType($tree, ['ASSET']);

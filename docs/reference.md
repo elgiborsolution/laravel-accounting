@@ -330,12 +330,16 @@ Dependencies: `AccountCategoryTreeService`, account/category repositories, `Acco
 | --- | --- | --- | --- |
 | `generalLedger($accountId, $startDate, $endDate)` | All required | `array` | Legacy custom-date-range summary with account/category path and opening balance. It does not return journal details. |
 | `trialBalance($year, $month)` | Year/month required | `array` | Tree data plus total assets, liabilities, and equity. |
-| `profitLoss($year, $month)` | Year/month required | `array` | Revenue/expense tree data and net income. |
-| `balanceSheet($year, $month)` | Year/month required | `array` | Asset/liability/equity tree data and totals. |
+| `profitLoss($year, $month, ?array $tenantIds = null)` | Year/month required; tenant list optional | `array` | Existing revenue/expense/net-income payload when omitted; separate `{tenant_id, report}` entries for an explicit list. |
+| `balanceSheet($year, $month, ?array $tenantIds = null)` | Year/month required; tenant list optional | `array` | Existing asset/liability/equity payload when omitted; separate `{tenant_id, report}` entries for an explicit list. |
 | `cashFlow($year, $month)` | Year/month required | `array` | Operating/investing/financing tree data and net cash flow. |
 
 Rules: financial reports use monthly balances on the resolved transaction connection and category/account master data via repositories. Tree balances aggregate posting accounts and descendants. The legacy General Ledger adjusts opening balance by posted movements from month start to a non-first-day start date without loading detail rows.
 
+
+### `ConsolidatedReportService`
+
+Resolve `ESolution\LaravelAccounting\Services\ConsolidatedReportService` from the container or inject it. `profitLoss($year, $month, array $tenantIds)` and `balanceSheet($year, $month, array $tenantIds)` require a nonempty valid tenant list and return `{tenant_ids, period: {year, month}, report}`. Each tenant's existing report runs in its own context; amounts are then merged by stable category/account codes with explicit compatibility checks and rebuilt subtotals. This service performs arithmetic consolidation without intercompany eliminations and does not change existing report/API responses or register an endpoint. See [service usage and output](./consolidated-reports.md).
 
 ## Support Registries
 
@@ -2021,6 +2025,8 @@ Example response:
 
 Description: returns profit and loss report for a year and month.
 
+Optional `tenant_ids[]` returns each tenant's report separately, without consolidation. The list must be nonempty, contain valid tenants, and is deduplicated before execution. See [tenant financial reports](./tenant-financial-reports.md) for request/response examples and context restoration rules. Omitting it preserves the response below.
+
 Query parameters:
 
 - `year` required integer
@@ -2051,6 +2057,8 @@ Example response:
 ### GET `/api/accounting/reports/balance-sheet`
 
 Description: returns balance sheet for a year and month.
+
+Optional `tenant_ids[]` returns each tenant's report separately, without consolidation. The list must be nonempty, contain valid tenants, and is deduplicated before execution. See [tenant financial reports](./tenant-financial-reports.md) for request/response examples and context restoration rules. Omitting it preserves the response below.
 
 Query parameters:
 
