@@ -322,28 +322,161 @@ $details = app(GeneralLedgerService::class)->getLedgerDetails($accountId, 2026, 
 
 File: [`src/Services/ReportService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ReportService.php)
 
-Purpose: legacy custom-range General Ledger summary and category-tree financial reports.
+Purpose: legacy custom-range General Ledger summary, category-tree financial reports, and separate profit/loss or balance-sheet results for explicitly selected tenants.
 
-Dependencies: `AccountCategoryTreeService`, account/category repositories, `AccountingTableResolver`, `MonthlyBalance`, transaction connection.
+Dependencies: `AccountCategoryTreeService`, `AccountCategoryRepository`, `AccountRepository`, `AccountingTableResolver`; `MonthlyBalance` and `AccountingConnectionResolver` for transaction data; container-resolved `TenantReportRunner` when tenant IDs are supplied.
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
 | `generalLedger($accountId, $startDate, $endDate)` | All required | `array` | Legacy custom-date-range summary with account/category path and opening balance. It does not return journal details. |
 | `trialBalance($year, $month)` | Year/month required | `array` | Tree data plus total assets, liabilities, and equity. |
-| `profitLoss($year, $month, ?array $tenantIds = null)` | Year/month required; tenant list optional | `array` | Existing revenue/expense/net-income payload when omitted; separate `{tenant_id, report}` entries for an explicit list. |
-| `balanceSheet($year, $month, ?array $tenantIds = null)` | Year/month required; tenant list optional | `array` | Existing asset/liability/equity payload when omitted; separate `{tenant_id, report}` entries for an explicit list. |
+| `profitLoss($year, $month, ?array $tenantIds = null)` | Year/month required; nullable tenant list defaults to `null` | `array` | Returns revenue/expense trees and `net_income` for the current context, or a list of separate `{tenant_id, report}` entries for selected tenants. It never consolidates tenants. |
+| `balanceSheet($year, $month, ?array $tenantIds = null)` | Year/month required; nullable tenant list defaults to `null` | `array` | Returns asset/liability/equity trees and totals for the current context, or a list of separate `{tenant_id, report}` entries for selected tenants. It never consolidates tenants. |
 | `cashFlow($year, $month)` | Year/month required | `array` | Operating/investing/financing tree data and net cash flow. |
 
-Rules: financial reports use monthly balances on the resolved transaction connection and category/account master data via repositories. Tree balances aggregate posting accounts and descendants. The legacy General Ledger adjusts opening balance by posted movements from month start to a non-first-day start date without loading detail rows.
+Report rules:
 
+- These methods have no declared PHP return type; their runtime results are arrays. Year/month arguments are required, untyped, and have no defaults. `ReportService` does not itself validate the period. Its HTTP financial-report actions require an integer year and a month from 1 to 12; the consolidated/summary services below additionally enforce year >= 1.
+- Financial reports read the requested month's stored `MonthlyBalance` rows on the resolved transaction connection and master accounts/categories through repositories. Missing snapshots contribute zero; these reports do not use the live fallback in `AccountBalanceService` or generate closing snapshots.
+- Category balances include direct account balances plus descendant subtotals. Profit/loss groups root `REVENUE` and `EXPENSE` nodes and subtracts expense totals from revenue totals. Balance sheet groups root `ASSET`, `LIABILITY`, and `EQUITY` nodes.
+- The legacy General Ledger returns account/category path and opening balance only. It adjusts opening balance by posted movements from month start to a non-first-day start date; it does not return detail rows.
+- `trialBalance()` and `cashFlow()` remain current-context reports and do not accept a tenant list. Trial balance returns `data` and asset/liability/equity totals; cash flow returns operating/investing/financing groups and `net_cash_flow`.
+
+Tenant-list behavior (also reused by consolidated reports and summaries):
+
+- Omit `$tenantIds`, or pass PHP `null`, to preserve the existing current-connection payload. Direct PHP calls do not initialize a tenant from a route/header; callers use their active application/tenant context. The HTTP actions retain their existing path/`X-Tenant` initialization only when `tenant_ids` is absent.
+- An explicit list must be a nonempty sequential array of nonblank integer/string identifiers. Empty, associative, nested, or otherwise invalid lists are rejected. Explicit HTTP `tenant_ids=null` is invalid rather than an omitted parameter.
+- `TenantReportRunner` requires the host `tenancy()` integration and an Eloquent `tenancy.tenant_model`. It trims identifiers, resolves primary key then route key, validates the entire list before running any report, and deduplicates both repeated IDs and aliases for the same record. Results use canonical tenant primary keys as strings, in first-resolved order.
+- Each tenant's report runs separately after host tenancy initialization. An unresolved tenant, unavailable integration, initialization failure, or mismatched initialized identity fails explicitly; no tenant is silently skipped and no default database is substituted for it. There is no partial-success response.
+- The runner restores the previous tenant, or ends tenancy if previously inactive, in `finally`. A nested `finally` restores the original Laravel default connection even if tenancy cleanup throws. Validation failures before switching leave the caller context unchanged.
+- With shared master mode enabled, master metadata stays on its configured connection while monthly balances follow the active tenant/application transaction connection. With shared mode disabled, master data also follows that context. Existing explicit model/resolver/repository connection overrides remain effective; no cross-database join or new report cache is introduced. Report trees use unscoped `AccountRepository::allOrdered()`; selecting tenants does not add a master-account `tenant_id` ownership filter.
+
+Return structures:
+
+- Current-context profit/loss: `{data: {revenue: [...], expense: [...]}, net_income: number}`.
+- Current-context balance sheet: `{data: {asset: [...], liability: [...], equity: [...]}, total_assets: number, total_liabilities: number, total_equity: number}`.
+- An explicit list for either method: `[{tenant_id: string, report: <current-context payload>}, ...]`. There is no additional period wrapper or combined total on this list.
+- The two HTTP actions wrap the returned payload/list in `{status: 200, message: string, data: ...}`. Their route/query name is `tenant_ids[]`; the PHP parameter is `$tenantIds`. Explicit lists select report targets without first initializing the path/header tenant. Consolidated reports and summaries below are PHP entry points, not additional HTTP endpoints.
+
+Example:
+
+```php
+use ESolution\LaravelAccounting\Services\ReportService;
+
+$reports = app(ReportService::class);
+$activeProfitLoss = $reports->profitLoss(2026, 7);
+$perTenantProfitLoss = $reports->profitLoss(2026, 7, ['tenant-a', 'tenant-b', 'tenant-a']);
+$perTenantBalanceSheets = $reports->balanceSheet(2026, 7, ['tenant-a', 'tenant-b']);
+// The repeated tenant-a is returned once; each report remains separate.
+```
+
+See [per-tenant request/response examples](./tenant-financial-reports.md).
 
 ### `ConsolidatedReportService`
 
-Resolve `ESolution\LaravelAccounting\Services\ConsolidatedReportService` from the container or inject it. `profitLoss($year, $month, array $tenantIds)` and `balanceSheet($year, $month, array $tenantIds)` require a nonempty valid tenant list and return `{tenant_ids, period: {year, month}, report}`. `profitLossSummary($year, $month, array $tenantIds)` reuses the profit/loss path and shared classification calculator to return `{tenant_ids, period, summary}`. Each tenant's existing report runs in its own context; amounts are then merged by stable category/account codes with explicit compatibility checks and rebuilt subtotals. This service performs arithmetic consolidation without intercompany eliminations and does not change existing report/API responses or register an endpoint. See [service usage and output](./consolidated-reports.md).
+File: [`src/Services/ConsolidatedReportService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ConsolidatedReportService.php)
 
-### Profit/loss summary services
+Purpose: arithmetic consolidation of profit/loss and balance-sheet reports, plus a consolidated profit/loss summary using the existing classification calculator.
 
-`ESolution\LaravelAccounting\Services\ProfitLossSummaryService::summarize($year, $month, array $tenantIds)` returns `{tenant_ids, period, summaries: [{tenant_id, summary}, ...]}`. `ConsolidatedReportService::profitLossSummary(...)` returns `{tenant_ids, period, summary}`. Both reuse existing reporting/tenancy paths and the same `ProfitLossSummaryCalculator`; summary components are classified by configurable stable codes under `accounting.profit_loss_summary`. Account rules override category/ancestor rules. Account `5210` defaults to operating expense; income tax requires an explicit mapping. Existing report/API payloads are unchanged. See [formulas, mappings, service usage, and examples](./profit-loss-summaries.md).
+Dependencies: constructor-injected `ReportService`, `TenantReportRunner`, `AccountCategoryRepository`, and `AccountRepository`; `profitLossSummary()` resolves `ProfitLossSummaryCalculator` from the Laravel container. The existing four-argument constructor is unchanged.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `profitLoss($year, $month, array $tenantIds): array` | All required; year integer >= 1, month 1..12, nonempty valid tenant list | `array` | Returns `{tenant_ids, period: {year, month}, report: {data: {revenue, expense}, net_income}}` with amounts combined across selected tenants. |
+| `balanceSheet($year, $month, array $tenantIds): array` | All required; year integer >= 1, month 1..12, nonempty valid tenant list | `array` | Returns `{tenant_ids, period: {year, month}, report: {data: {asset, liability, equity}, total_assets, total_liabilities, total_equity}}`. |
+| `profitLossSummary($year, $month, array $tenantIds): array` | All required; same period/list requirements | `array` | Calls `profitLoss()` and applies the shared summary classifications/formulas. Returns `{tenant_ids, period: {year, month}, summary}`; it does not replace or alter the ordinary report payload. |
+
+Consolidation rules:
+
+- There is no current-tenant/default-list shortcut: `$tenantIds` is required and cannot be empty. Tenant validation, deduplication, initialization, and `finally` restoration follow the `ReportService` tenant-list rules above. Returned period values are normalized to integers; there is no default year or month.
+- Each tenant's ordinary report and metadata are materialized in its own context. After the runner restores the caller context, consolidation aligns categories by `category_code` and accounts by `code`, not UUID. Codes are exact strings, including case and leading zeros. Categories/accounts absent from some tenants are included from the others.
+- Matching category definitions must agree on parent **code**, type, category name, report type, and status. Matching account definitions must agree on category **code**, name, postable flag, and status. Every occurrence of a participating code is checked, including when another tenant places it outside the requested report. Unrelated codes outside the requested report are not compared.
+- Definition conflicts throw `ValidationException` under `consolidation`, naming the code, incompatible field, and tenant. Invalid hierarchy references, duplicate source category/account occurrences, and invalid account balances also fail explicitly.
+- Only corresponding account balances are summed. Category balances are rebuilt from direct accounts plus immediate child subtotals; report totals use root subtotals only. Original category/report totals are not added again. Signed values are retained and sums are rounded to two decimal places.
+- Consolidated category nodes contain `category_code`, `parent_code`, `type`, `category_name`, `report_type`, `status`, `children`, `accounts`, and `balance`. Accounts contain `code`, `category_code`, `name`, `is_postable`, `status`, and `balance`. Database UUID fields are omitted; roots, children, and accounts are sorted by code.
+- `profitLossSummary()` snapshots the configured mappings before calling `profitLoss()`, then calculates from the merged account balances after context restoration. It uses the same summary fields, precedence, sign rules, and formulas documented under `ProfitLossSummaryService` below. Classification errors therefore also leave the caller's tenant/connection restored.
+- This is arithmetic consolidation only: no intercompany eliminations, live-balance fallback, currency conversion, new report cache, or additional HTTP endpoint. Shared/tenant-local master modes and explicit connection overrides continue through the existing report/repository paths.
+
+Example:
+
+```php
+use ESolution\LaravelAccounting\Services\ConsolidatedReportService;
+
+$reports = app(ConsolidatedReportService::class);
+$profitLoss = $reports->profitLoss(2026, 7, ['tenant-a', 'tenant-b']);
+$balanceSheet = $reports->balanceSheet(2026, 7, ['tenant-a', 'tenant-b']);
+$summary = $reports->profitLossSummary(2026, 7, ['tenant-a', 'tenant-b']);
+// $summary['tenant_ids'], $summary['period'], $summary['summary']['net_profit']
+```
+
+See [consolidated report structures and examples](./consolidated-reports.md).
+
+### `ProfitLossSummaryService`
+
+File: [`src/Services/ProfitLossSummaryService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ProfitLossSummaryService.php)
+
+Purpose: returns a separate four-stage profit/loss summary for each selected tenant, without consolidating their amounts.
+
+Dependencies: constructor-injected `ReportService` and `ProfitLossSummaryCalculator`; tenant processing is delegated to `ReportService::profitLoss(..., $tenantIds)` and its existing `TenantReportRunner` path.
+
+| Method | Parameters | Returns | Description |
+| --- | --- | --- | --- |
+| `summarize($year, $month, array $tenantIds): array` | All required; year integer >= 1, month 1..12, nonempty valid tenant list; no defaults | `array` | Returns `{tenant_ids, period: {year, month}, summaries: [{tenant_id, summary}, ...]}`. Each tenant's report is classified separately using the same mapping snapshot. |
+
+Summary behavior (shared with `ConsolidatedReportService::profitLossSummary()`):
+
+- Tenant IDs are validated/deduplicated and source reports are read/restored through the existing report path described above. IDs are canonical strings; period values are integers. Calculations run on materialized report data after the runner's `finally` restoration. There is no partial-success response or additional HTTP envelope on these PHP results.
+- Every `summary` contains numeric `sales_revenue`, `sales_returns`, `sales_discounts`, `cogs`, `other_operating_income`, `operating_expenses`, `non_operating_income`, `non_operating_expenses`, and `income_tax`, plus the four calculated fields below. Empty components are returned as zero.
+
+```text
+net_sales        = sales_revenue - sales_returns - sales_discounts
+gross_profit     = net_sales - cogs
+operating_profit = gross_profit + other_operating_income - operating_expenses
+net_profit       = operating_profit + non_operating_income
+                   - non_operating_expenses - income_tax
+```
+
+- Each account is counted once. Parent category balances and the source `net_income` are not added to account amounts. Duplicate report codes and invalid balances fail under `summary` rather than being double counted. Unmapped nonzero accounts also fail explicitly; unmapped zero balances contribute nothing.
+- Income components are credit-positive and deductions are debit-positive, normalized from the account category's `REVENUE`/`EXPENSE` type. A sales-return balance of `-50` in a revenue category becomes a deduction of `50`; a reversal remains a negative deduction. Absolute values are not used. Components and calculated values are rounded to two decimal places.
+- The consolidated summary retains all existing code-definition compatibility checks above, including names/status flags. Names are not used to classify summary components; those compatibility checks are distinct from classification.
+
+Configurable summary mappings:
+
+The host's published `config/accounting.php` contains editable literal arrays at `profit_loss_summary.account_mappings` and `profit_loss_summary.category_mappings`. The corresponding runtime keys are under `accounting.profit_loss_summary`. No separate mapping file or class-constant reference is required in the published config.
+
+| Mapping | Default component |
+| --- | --- |
+| Account `5210` | `operating_expenses` |
+| Account `5601` | `sales_discounts` |
+| Account `5701` | `sales_returns` |
+| Categories `SALES_REVENUE`, `SERVICE_REVENUE` | `sales_revenue` |
+| Category `COST_OF_GOODS_SOLD` | `cogs` |
+| Category `OPERATING_EXPENSE` | `operating_expenses` |
+| Category `OTHER_REVENUE` | `non_operating_income` |
+| Category `OTHER_EXPENSE` | `non_operating_expenses` |
+
+- Exact account-code rules take precedence over the nearest category/ancestor-code rule, including seeded account defaults. Partial host overrides merge over compatibility defaults. Category/account UUIDs and translated labels do not drive classification.
+- Other operating income and income tax require explicit classifications. Account `5210` remains an ordinary operating expense unless its account mapping is explicitly changed to `income_tax`; a generic or translated tax label never implies income tax.
+- Each call snapshots one set of rules before tenant iteration. The per-tenant and consolidated summary entry points use the same component identifiers, precedence, and formulas. Invalid mapping configuration fails under `summary_mappings` before reports run.
+- Publish with `php artisan vendor:publish --tag=accounting-config`, edit the host file, then rebuild `php artisan config:cache` when using cached configuration. Existing published files can be edited directly. Stored snapshots, seeded chart data, and existing report/API responses remain unchanged.
+
+Example:
+
+```php
+use ESolution\LaravelAccounting\Services\ProfitLossSummaryService;
+
+$summaries = app(ProfitLossSummaryService::class)
+    ->summarize(2026, 7, ['tenant-a', 'tenant-b']);
+$firstTenantProfit = $summaries['summaries'][0]['summary']['net_profit'];
+
+// Programmatic overrides; use the published config file for persistent settings.
+config([
+    'accounting.profit_loss_summary.account_mappings.4101' => 'other_operating_income',
+    'accounting.profit_loss_summary.account_mappings.5210' => 'income_tax',
+]);
+```
+
+See [summary mapping and output examples](./profit-loss-summaries.md).
 
 ## Support Registries
 
