@@ -2,14 +2,17 @@
 
 namespace ESolution\LaravelAccounting\Services;
 
+use ESolution\LaravelAccounting\Enums\JournalStatus;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class ReportService
 {
@@ -116,6 +119,48 @@ class ReportService
     }
 
     /**
+     * Profit/loss movements for inclusive calendar months, without snapshots.
+     */
+    public function profitLossRange(array $range, ?array $tenantIds = null): array
+    {
+        $period = $this->profitLossRangePeriod($range);
+        if ($tenantIds !== null) {
+            $reports = app(TenantReportRunner::class)->run(
+                $tenantIds, fn () => $this->buildProfitLossRangeReport($period)
+            );
+
+            return [
+                'tenant_ids' => array_column($reports, 'tenant_id'),
+                'period' => $period,
+                'reports' => $reports,
+            ];
+        }
+
+        return ['period' => $period, 'report' => $this->buildProfitLossRangeReport($period)];
+    }
+
+    public function profitLossRangePeriod(array $range): array
+    {
+        $validated = validator($range, [
+            'start_year' => ['required', 'integer', 'min:1'],
+            'start_month' => ['required', 'integer', 'between:1,12'],
+            'end_year' => ['required', 'integer', 'min:1'],
+            'end_month' => ['required', 'integer', 'between:1,12'],
+        ])->validate();
+        $normalized = array_map(fn ($value) => (int) $value, $validated);
+        if ([$normalized['start_year'], $normalized['start_month']] > [$normalized['end_year'], $normalized['end_month']]) {
+            throw ValidationException::withMessages([
+                'end_month' => ['The end period must be on or after the start period.'],
+            ]);
+        }
+
+        return [
+            'year' => $normalized['end_year'],
+            'month' => $normalized['end_month'],
+        ] + $normalized;
+    }
+
+    /**
      * Balance Sheet Report
      * Menampilkan posisi keuangan perusahaan.
      */
@@ -163,6 +208,71 @@ class ReportService
             ],
             'net_cash_flow' => $this->sumNodes($operating) + $this->sumNodes($investing) + $this->sumNodes($financing),
         ];
+    }
+
+    protected function buildProfitLossRangeReport(array $period): array
+    {
+        $tree = $this->buildTreeWithMovements($period);
+        $revenue = $this->pickRootNodesByType($tree, ['REVENUE']);
+        $expense = $this->pickRootNodesByType($tree, ['EXPENSE']);
+
+        return [
+            'data' => ['revenue' => $revenue, 'expense' => $expense],
+            'net_income' => round($this->sumNodes($revenue) - $this->sumNodes($expense), 2),
+        ];
+    }
+
+    protected function buildTreeWithMovements(array $period): Collection
+    {
+        $categories = $this->categories->allOrdered();
+        $accounts = $this->accounts->allOrdered();
+        $movements = $this->profitLossRangeMovements($accounts->pluck('id')->all(), $period);
+        $types = $categories->pluck('type', 'id');
+        $balances = $accounts->mapWithKeys(function ($account) use ($movements, $types) {
+            $movement = $movements->get($account->id);
+            $debit = (float) ($movement->total_debit ?? 0);
+            $credit = (float) ($movement->total_credit ?? 0);
+            $debitNormal = in_array($types->get($account->category_id), ['ASSET', 'EXPENSE'], true);
+
+            // Adapt period movement to the existing tree balance attachment;
+            // this value contains neither a snapshot nor an opening balance.
+            return [$account->id => (object) [
+                'ending_balance' => round($debitNormal ? $debit - $credit : $credit - $debit, 2),
+            ]];
+        });
+
+        return $this->applyBalances($this->treeService->getTree($categories, $accounts), $balances);
+    }
+
+    protected function profitLossRangeMovements(array $accountIds, array $period): Collection
+    {
+        if ($accountIds === []) {
+            return collect();
+        }
+
+        $start = Carbon::create($period['start_year'], $period['start_month'], 1)->toDateString();
+        $end = Carbon::create($period['end_year'], $period['end_month'], 1)->endOfMonth()->toDateString();
+        $connection = DB::connection($this->transactionConnection());
+        $details = $this->tables->table('journal_entry_details');
+        $journals = $this->tables->table('journal_entries');
+        $grammar = $connection->getQueryGrammar();
+
+        return $connection->table($details)
+            ->join($journals, $journals.'.id', '=', $details.'.journal_entry_id')
+            ->whereIn($details.'.account_id', $accountIds)
+            ->whereDate($journals.'.trx_date', '>=', $start)
+            ->whereDate($journals.'.trx_date', '<=', $end)
+            ->where($journals.'.status', JournalStatus::POSTED->value)
+            ->where(function ($query) use ($journals) {
+                $query->whereNull($journals.'.source_type')
+                    ->orWhereNotIn($journals.'.source_type', ['OPENING_BALANCE', AccountOpeningBalanceService::SOURCE_TYPE]);
+            })
+            ->groupBy($details.'.account_id')
+            ->select($details.'.account_id')
+            ->selectRaw('SUM('.$grammar->wrap($details.'.debit').') as total_debit')
+            ->selectRaw('SUM('.$grammar->wrap($details.'.credit').') as total_credit')
+            ->get()
+            ->keyBy('account_id');
     }
 
     protected function buildTreeWithBalances($year, $month): Collection

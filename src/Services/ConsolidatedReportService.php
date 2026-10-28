@@ -43,6 +43,41 @@ class ConsolidatedReportService
         ];
     }
 
+    public function profitLossRange(array $range, array $tenantIds): array
+    {
+        $period = $this->reports->profitLossRangePeriod($range);
+        $sources = $this->tenants->run($tenantIds, function () use ($range) {
+            return [
+                'payload' => $this->reports->profitLossRange($range)['report'],
+                'definitions' => $this->definitions(),
+            ];
+        });
+        $data = $this->mergeSources($sources, ['revenue' => 'REVENUE', 'expense' => 'EXPENSE']);
+
+        return [
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'period' => $period,
+            'report' => [
+                'data' => $data,
+                'net_income' => round($this->sumRoots($data['revenue']) - $this->sumRoots($data['expense']), 2),
+            ],
+        ];
+    }
+
+    public function profitLossSummaryRange(array $range, array $tenantIds): array
+    {
+        $period = $this->reports->profitLossRangePeriod($range);
+        $calculator = app(ProfitLossSummaryCalculator::class);
+        $mappings = $calculator->mappings();
+        $report = $this->profitLossRange($range, $tenantIds);
+
+        return [
+            'tenant_ids' => $report['tenant_ids'],
+            'period' => $period,
+            'summary' => $calculator->calculate($report['report'], $mappings),
+        ];
+    }
+
     /**
      * Merge the visible chart before category filters and pagination are applied.
      */

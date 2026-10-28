@@ -11,6 +11,28 @@ class ProfitLossSummaryService
         protected ProfitLossSummaryCalculator $calculator
     ) {}
 
+    public function summarizeRange(array $range, ?array $tenantIds = null): array
+    {
+        $period = $this->reports->profitLossRangePeriod($range);
+        $mappings = $this->calculator->mappings();
+        $reports = $this->reports->profitLossRange($range, $tenantIds);
+        if ($tenantIds === null) {
+            return [
+                'period' => $period,
+                'summary' => $this->calculator->calculate($reports['report'], $mappings),
+            ];
+        }
+
+        return [
+            'tenant_ids' => $reports['tenant_ids'],
+            'period' => $period,
+            'summaries' => array_map(fn (array $report) => [
+                'tenant_id' => $report['tenant_id'],
+                'summary' => $this->calculator->calculate($report['report'], $mappings),
+            ], $reports['reports']),
+        ];
+    }
+
     public function summarize($year, $month, array $tenantIds): array
     {
         $period = $this->calculator->period($year, $month);
