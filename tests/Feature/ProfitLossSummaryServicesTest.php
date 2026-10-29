@@ -36,6 +36,59 @@ class ProfitLossSummaryServicesTest extends TestCase
     }
 
     #[DataProvider('masterModes')]
+    public function test_grouped_monthly_summary_returns_only_each_tenants_four_profit_values(bool $shared): void
+    {
+        $this->prepareDatabases($shared);
+        $original = SummaryTenant::findOrFail('original');
+        $this->tenancy->initialize($original);
+        DB::setDefaultConnection('testbench');
+        $service = app(ConsolidatedReportService::class);
+        $ids = ['tenant-a', 'alpha', 'tenant-b', 'tenant-a'];
+        $before = $service->profitLossSummary(2026, 7, $ids);
+        $this->tenancy->initializations = [];
+        $result = $service->profitLossSummaryByTenant('2026', '7', $ids);
+
+        $this->assertSame(['tenant_ids', 'period', 'summaries'], array_keys($result));
+        $this->assertSame(['tenant-a', 'tenant-b'], $result['tenant_ids']);
+        $this->assertSame(['year' => 2026, 'month' => 7], $result['period']);
+        $this->assertSame([
+            ['tenant_id' => 'tenant-a', 'net_sales' => 1130.0, 'gross_profit' => 730.0, 'operating_profit' => 515.0, 'net_profit' => 547.0],
+            ['tenant_id' => 'tenant-b', 'net_sales' => 1970.0, 'gross_profit' => 1070.0, 'operating_profit' => 745.0, 'net_profit' => 812.0],
+        ], $result['summaries']);
+        $this->assertSame(['tenant-a', 'tenant-b', 'original'], $this->tenancy->initializations);
+        $this->assertSame($original, $this->tenancy->tenant);
+        $this->assertSame('testbench', DB::getDefaultConnection());
+        $this->assertSame($before, $service->profitLossSummary(2026, 7, $ids));
+
+        config()->set('accounting.profit_loss_summary.account_mappings', ['4101' => 'other_operating_income', '5210' => 'income_tax']);
+        $mapped = $service->profitLossSummaryByTenant(2026, 7, $ids);
+        $this->assertSame(560.0, $mapped['summaries'][0]['operating_profit']);
+        $this->assertSame(830.0, $mapped['summaries'][1]['operating_profit']);
+        $this->assertSame(547.0, $mapped['summaries'][0]['net_profit']);
+        $this->assertSame(812.0, $mapped['summaries'][1]['net_profit']);
+    }
+
+    public static function invalidGroupedPeriods(): array
+    {
+        return ['missing year' => [null, 7], 'zero year' => [0, 7], 'invalid month' => [2026, 13], 'fractional month' => [2026, 7.5]];
+    }
+
+    #[DataProvider('invalidGroupedPeriods')]
+    public function test_grouped_monthly_periods_are_validated_before_tenant_execution($year, $month): void
+    {
+        $this->prepareDatabases(false);
+        DB::setDefaultConnection('summary_original');
+        try {
+            app(ConsolidatedReportService::class)->profitLossSummaryByTenant($year, $month, ['tenant-a', 'tenant-b']);
+            $this->fail('Invalid periods must not execute tenant reports.');
+        } catch (ValidationException $e) {
+            $this->assertNotEmpty($e->errors());
+        }
+        $this->assertSame([], $this->tenancy->initializations);
+        $this->assertSame('summary_original', DB::getDefaultConnection());
+    }
+
+    #[DataProvider('masterModes')]
     public function test_separate_and_consolidated_summaries_use_each_tenants_balances_and_restore_context(bool $shared): void
     {
         $this->prepareDatabases($shared);
@@ -406,7 +459,8 @@ class ProfitLossSummaryServicesTest extends TestCase
 
     private function summaryCalls(): array
     {
-        return [[app(ProfitLossSummaryService::class), 'summarize'], [app(ConsolidatedReportService::class), 'profitLossSummary']];
+        return [[app(ProfitLossSummaryService::class), 'summarize'], [app(ConsolidatedReportService::class), 'profitLossSummary'],
+            [app(ConsolidatedReportService::class), 'profitLossSummaryByTenant']];
     }
 
     private function setBalance(string $connection, string $code, float $amount): void

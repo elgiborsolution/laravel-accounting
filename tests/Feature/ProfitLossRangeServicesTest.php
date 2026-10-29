@@ -42,6 +42,39 @@ class ProfitLossRangeServicesTest extends TestCase
     }
 
     #[DataProvider('masterModes')]
+    public function test_grouped_cross_year_summary_preserves_separate_tenant_values_and_range_contract(bool $shared): void
+    {
+        $this->prepareDatabases($shared);
+        $original = RangeTenant::findOrFail('original');
+        $this->tenancy->initialize($original);
+        DB::setDefaultConnection('testbench');
+        $service = app(ConsolidatedReportService::class);
+        $ids = ['tenant-a', 'alpha', 'tenant-b', 'tenant-a'];
+        $before = $service->profitLossSummaryRange($this->range(), $ids);
+        $this->tenancy->initializations = [];
+        $result = $service->profitLossSummaryRangeByTenant($this->range(), $ids);
+
+        $this->assertSame(['tenant_ids', 'period', 'summaries'], array_keys($result));
+        $this->assertSame(['tenant-a', 'tenant-b'], $result['tenant_ids']);
+        $this->assertSame($this->period(), $result['period']);
+        $this->assertSame([
+            ['tenant_id' => 'tenant-a', 'net_sales' => 1380.0, 'gross_profit' => 800.0, 'operating_profit' => 535.0, 'net_profit' => 560.0],
+            ['tenant_id' => 'tenant-b', 'net_sales' => 2750.0, 'gross_profit' => 1590.0, 'operating_profit' => 1060.0, 'net_profit' => 1110.0],
+        ], $result['summaries']);
+        $this->assertSame(['tenant-a', 'tenant-b', 'original'], $this->tenancy->initializations);
+        $this->assertSame($original, $this->tenancy->tenant);
+        $this->assertSame('testbench', DB::getDefaultConnection());
+        $this->assertSame($before, $service->profitLossSummaryRange($this->range(), $ids));
+
+        config()->set('accounting.profit_loss_summary.account_mappings', ['4101' => 'other_operating_income', '5210' => 'income_tax']);
+        $mapped = $service->profitLossSummaryRangeByTenant($this->range(), $ids);
+        $this->assertSame(580.0, $mapped['summaries'][0]['operating_profit']);
+        $this->assertSame(1150.0, $mapped['summaries'][1]['operating_profit']);
+        $this->assertSame(560.0, $mapped['summaries'][0]['net_profit']);
+        $this->assertSame(1110.0, $mapped['summaries'][1]['net_profit']);
+    }
+
+    #[DataProvider('masterModes')]
     public function test_cross_year_reports_and_summaries_are_separate_or_consolidated_as_requested(bool $shared): void
     {
         $this->prepareDatabases($shared);
@@ -356,7 +389,8 @@ class ProfitLossRangeServicesTest extends TestCase
     private function calls(): array
     {
         return [[app(ReportService::class), 'profitLossRange'], [app(ProfitLossSummaryService::class), 'summarizeRange'],
-            [app(ConsolidatedReportService::class), 'profitLossRange'], [app(ConsolidatedReportService::class), 'profitLossSummaryRange']];
+            [app(ConsolidatedReportService::class), 'profitLossRange'], [app(ConsolidatedReportService::class), 'profitLossSummaryRange'],
+            [app(ConsolidatedReportService::class), 'profitLossSummaryRangeByTenant']];
     }
 
     private function range(): array

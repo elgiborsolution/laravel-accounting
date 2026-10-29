@@ -78,6 +78,33 @@ class ConsolidatedReportService
         ];
     }
 
+    public function profitLossSummaryByTenant($year, $month, array $tenantIds): array
+    {
+        return $this->tenantSummaryTotals(
+            app(ProfitLossSummaryService::class)->summarize($year, $month, $tenantIds)
+        );
+    }
+
+    public function profitLossSummaryRangeByTenant(array $range, array $tenantIds): array
+    {
+        return $this->tenantSummaryTotals(
+            app(ProfitLossSummaryService::class)->summarizeRange($range, $tenantIds)
+        );
+    }
+
+    protected function tenantSummaryTotals(array $result): array
+    {
+        $result['summaries'] = array_map(fn (array $entry) => [
+            'tenant_id' => $entry['tenant_id'],
+            'net_sales' => $entry['summary']['net_sales'],
+            'gross_profit' => $entry['summary']['gross_profit'],
+            'operating_profit' => $entry['summary']['operating_profit'],
+            'net_profit' => $entry['summary']['net_profit'],
+        ], $result['summaries']);
+
+        return $result;
+    }
+
     /**
      * Merge the visible chart before category filters and pagination are applied.
      */
