@@ -1,6 +1,6 @@
 # projectmem - laravel-accounting
 
-_Last updated: 2026-11-04_
+_Last updated: 2026-11-05_
 
 ## Project purpose
 `elgibor-solution/laravel-accounting` is a Laravel 11/12 accounting package that provides category-tree based chart-of-accounts management, journal entry storage, service-to-account mappings, monthly closing, and financial reporting.
@@ -22,6 +22,7 @@ _Last updated: 2026-11-04_
 - Cutoffs are opt-in transaction-DB date locks with singleton state and append-only audit. No partial snapshots. FiscalPeriodService checks actual mutation dates; reopening respects closed months. [src/Services/ClosingService.php]
 - Shared cutoff uses a dedicated central connection and fixed canonical tenant scope. Hold central lock through local commits; publish only after every tenant succeeds. Retry revalidates and skips closed full months; partial months never snapshot. [src/Services/ClosingService.php]
 - closing_day is optional next-month eligibility, not an accounting boundary. Clamp short months; allow late runs; keep calendar snapshots/cutoffs separate. Bulk calls select due months; shared preflight validates pending months before local commits. [src/Services/ClosingService.php]
+- Refactor: Refactor code structure and remove redundant code blocks for improved readability and maintainability [config/accounting.php]
 
 ## Notes
 - chore: Remove stock opname gain and loss services and related mappings from inventory catalog

@@ -184,9 +184,11 @@ class ClosingService
                 $debit = $activity->debit ?? 0;
                 $credit = $activity->credit ?? 0;
 
-                // Determine normal balance from category type
-                $type = $categoryTypes->get($account->category_id, 'asset');
-                $isDebitNormal = in_array($type, ['asset', 'expense']);
+                // Determine normal balance from category type. AccountCategory exposes
+                // types uppercase; compare case-insensitively so ASSET/EXPENSE snapshots
+                // are stored debit-positive like every report reader expects.
+                $type = strtoupper((string) $categoryTypes->get($account->category_id, 'ASSET'));
+                $isDebitNormal = in_array($type, ['ASSET', 'EXPENSE'], true);
 
                 if ($isDebitNormal) {
                     $ending = $opening + $debit - $credit;

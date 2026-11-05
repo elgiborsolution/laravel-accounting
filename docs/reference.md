@@ -315,7 +315,7 @@ Dependencies: `AccountCategoryRepository`, `AccountingTableResolver`, `FiscalPer
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
-| `closeMonth($year, $month, $userId = null)` | Year/month required; closer ID optional | `FiscalPeriod` | Ensures the selected calendar period, upserts its monthly balances, and marks it closed. Optional `closing_day` (1–31 or `month_end`) rejects execution before that day in the selected or following month, per `closing_day_month`. |
+| `closeMonth($year, $month, $userId = null)` | Year/month required; closer ID optional | `FiscalPeriod` | Ensures the selected calendar period, upserts its monthly balances, and marks it closed. Optional `closing_day` (1–31 or `month_end`) rejects execution before that day in the selected or following month, per `closing_day_month`. Snapshots use natural signs: `ASSET`/`EXPENSE` categories (compared case-insensitively) are debit-normal, others credit-normal; an account without a resolvable category stays debit-normal. |
 | `closeThroughCurrentMonth($userId = null, ?string $cutoffDate = null)` | Optional closer ID and `Y-m-d` cutoff | `Collection<FiscalPeriod>\|array` | Explicit dates delegate to `closeThroughDate()`. Without a date, closes due months; null `closing_day` retains closing through the current month. Enabled shared mode publishes the applicable month-end cutoff for the saved scope. It takes no tenant argument, so the first shared close must use `closeThroughDate(..., $tenantIds)`. |
 | `closeUntilCurrentMonth($userId = null, ?string $cutoffDate = null)` | Optional closer ID and cutoff | `Collection<FiscalPeriod>\|array` | Alias of `closeThroughCurrentMonth()`. |
 | `reopenMonth($year, $month, $userId = null)` | Year/month required; user ID currently unused | `FiscalPeriod` | Reopens one closed period. |
@@ -540,7 +540,7 @@ File: [`src/Services/ReportService.php`](/c:/laragon/www/package-custom/laravel-
 
 Purpose: legacy custom-range General Ledger summary, category-tree financial reports, inclusive month-range profit/loss movements, and separate results for explicitly selected tenants.
 
-Dependencies: `AccountCategoryTreeService`, `AccountCategoryRepository`, `AccountRepository`, `AccountingTableResolver`; `MonthlyBalance` and `AccountingConnectionResolver` for transaction data; container-resolved `TenantReportRunner` when tenant IDs are supplied. Range methods query journal headers/details on the resolved transaction connection and recognize the package's opening-journal source markers.
+Dependencies: `AccountCategoryTreeService`, `AccountCategoryRepository`, `AccountRepository`, `AccountingTableResolver`; `MonthlyBalance` and `AccountingConnectionResolver` for transaction data; container-resolved `TenantReportRunner` when tenant IDs are supplied. Range methods query journal headers/details on the resolved transaction connection and recognize the package's opening-journal source markers. `profitLossDetail()` also resolves `ProfitLossSummaryCalculator` and `ServiceRepository` (closing-service markers through the master-data resolver).
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
@@ -550,6 +550,8 @@ Dependencies: `AccountCategoryTreeService`, `AccountCategoryRepository`, `Accoun
 | `profitLossRange(array $range, ?array $tenantIds = null): array` | Complete inclusive month range required; tenant list defaults to `null` | `array` | Active context: `{period, report: {data: {revenue, expense}, net_income}}`. Explicit tenants: `{tenant_ids, period, reports: [{tenant_id, report}, ...]}`. Reads posted movements, never snapshots; amounts remain separate per tenant. |
 | `profitLossRangePeriod(array $range): array` | Complete inclusive month range required | `array` | Validates the range without executing a report; returns integer `year`, `month`, `start_year`, `start_month`, `end_year`, `end_month`. `year/month` identify the end month. Shared by the range report/summary entry points. |
 | `balanceSheet($year, $month, ?array $tenantIds = null)` | Year/month required; nullable tenant list defaults to `null` | `array` | Returns asset/liability/equity trees and totals for the current context, or a list of separate `{tenant_id, report}` entries for selected tenants. It never consolidates tenants. |
+| `profitLossDetail($year, $month, ?array $tenantIds = null)` | Year/month required; nullable tenant list as for `balanceSheet()` | `array` | `{prior_months_profit_loss, current_month_profit_loss}` for the active context, or runner output `[{tenant_id, report}]` when tenant IDs are supplied. Same exclusions as the consolidated profit detail methods. |
+| `profitLossDetailMarkers(): array` | None | `array` | Validated `{closing_service_codes, closing_source_types}` from `accounting.profit_loss_detail`, falling back to the defaults per missing key. |
 | `cashFlow($year, $month)` | Year/month required | `array` | Operating/investing/financing tree data and net cash flow. |
 
 Report rules:
@@ -629,7 +631,7 @@ File: [`src/Services/ConsolidatedReportService.php`](/c:/laragon/www/package-cus
 
 Purpose: arithmetic consolidation of monthly and month-range profit/loss reports/summaries, compact profit/loss summaries grouped by tenant, balance-sheet reports, and category charts for service retrieval.
 
-Dependencies: constructor-injected `ReportService`, `TenantReportRunner`, `AccountCategoryRepository`, and `AccountRepository`; consolidated summary methods resolve `ProfitLossSummaryCalculator`, grouped summary methods resolve `ProfitLossSummaryService`, and `categoryTree()` resolves `AccountBalanceService` from the Laravel container. The existing four-argument constructor is unchanged.
+Dependencies: constructor-injected `ReportService`, `TenantReportRunner`, `AccountCategoryRepository`, and `AccountRepository`; consolidated summary methods resolve `ProfitLossSummaryCalculator`, grouped summary methods resolve `ProfitLossSummaryService`, and `categoryTree()` resolves `AccountBalanceService` from the Laravel container. Balance-sheet summaries also read `FiscalPeriod`, `MonthlyBalance` and `JournalEntry` on each tenant's transaction connection to classify snapshots, read `Account` with the category repository to detect legacy-signed snapshots, call `ReportService::profitLossRange()` for current-year profit/loss, and read `accounting.balance_sheet_summary` and `accounting.fiscal.start_month`. Profit detail methods call `ReportService::profitLossDetailMarkers()` and `profitLossDetail()`. The existing four-argument constructor is unchanged.
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
@@ -640,6 +642,12 @@ Dependencies: constructor-injected `ReportService`, `TenantReportRunner`, `Accou
 | `profitLossSummaryRange(array $range, array $tenantIds): array` | Complete inclusive month range and nonempty valid tenant list required | `array` | Returns `{tenant_ids, period, summary}`. Applies the existing mappings/calculator to `profitLossRange()` account balances after context restoration. |
 | `profitLossSummaryByTenant($year, $month, array $tenantIds): array` | All required; integer year >= 1, month 1..12, nonempty valid tenant list; no defaults | `array` | Delegates to `ProfitLossSummaryService::summarize()` and returns `{tenant_ids, period: {year, month}, summaries: [{tenant_id, net_sales, gross_profit, operating_profit, net_profit}, ...]}`. Each row contains only that tenant's four calculated profit values. |
 | `profitLossSummaryRangeByTenant(array $range, array $tenantIds): array` | Complete inclusive month range and nonempty valid tenant list required; no defaults | `array` | Delegates to `ProfitLossSummaryService::summarizeRange()` and returns the same compact per-tenant rows with its six-field range `period`. Never combines tenant amounts. |
+| `balanceSheetSummary($year, $month, array $tenantIds): array` | All required; integer year >= 1, month 1..12, nonempty valid tenant list | `array` | Returns `{tenant_ids, period: {year, month}, current_year_period, summary: {status, <metrics>, snapshots: [{tenant_id, status}, ...]}}`. Amounts are the `balanceSheet()` month-end amounts consolidated by stable codes; ratios are calculated from those consolidated amounts. Snapshot metrics are `null` unless every tenant's snapshot is `current`. |
+| `balanceSheetSummaryByTenant($year, $month, array $tenantIds): array` | All required; same period/list requirements | `array` | Returns `{tenant_ids, period: {year, month}, current_year_period, summaries: [{tenant_id, status, <metrics>}, ...]}`. Each row uses only that tenant's `ReportService::balanceSheet()` tree and profit/loss. Snapshot metrics are `null` when that tenant's status is not `current`. Never combines tenant amounts. |
+| `balanceSheetSummaryByMonth(array $range, array $tenantIds): array` | Complete inclusive `start_year`, `start_month`, `end_year`, `end_month` and nonempty valid tenant list required | `array` | Returns `{tenant_ids, period, summaries: [{period: {year, month}, current_year_period, summary}, ...]}`, one entry per month in chronological order. Each `summary` has the `balanceSheetSummary()` shape for that month's end, consolidated across the selected tenants. Months are never summed together. `period` is the six-field range period. |
+| `balanceSheetProfitDetail($year, $month, array $tenantIds): array` | All required; integer year >= 1, month 1..12, nonempty valid tenant list | `array` | Returns `{tenant_ids, period: {year, month}, summary: {prior_months_profit_loss, current_month_profit_loss}}`. Informational posted profit before and within the month, summed across tenants. Excludes opening and closing-transfer journals. Never added to equity. |
+| `balanceSheetProfitDetailByTenant($year, $month, array $tenantIds): array` | All required; same period/list requirements | `array` | Returns `{tenant_ids, period: {year, month}, summaries: [{tenant_id, prior_months_profit_loss, current_month_profit_loss}, ...]}`. Never combines tenant amounts. |
+| `balanceSheetProfitDetailByMonth(array $range, array $tenantIds): array` | Complete inclusive range and nonempty valid tenant list required | `array` | Returns `{tenant_ids, period, summaries: [{period: {year, month}, summary}, ...]}`, one consolidated entry per month in chronological order. `period` is the six-field range period. |
 | `categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array` | Required nonempty valid tenant list; optional balance period and inclusion flag | `array` | Returns `{tenant_ids, data: [category nodes], category_aliases: {source_uuid: [category_codes]}}`. Merges full visible charts before `AccountCategoryTreeService::index()` applies filters and pagination. Defaults to metadata only; balance periods default through `AccountBalanceService`. |
 
 Tenant-grouped summary rules:
@@ -672,6 +680,177 @@ Example monthly response:
   ]
 }
 ```
+
+Balance-sheet summary rules:
+
+- Each month is a position as of that month's end, read from the existing `MonthlyBalance` snapshots through `ReportService::balanceSheet()`. Snapshots are never added across months, and balance-sheet amounts never fall back to live journals. Like `balanceSheet()`, amounts contain only `ASSET`, `LIABILITY` and `EQUITY` root categories.
+- `<metrics>` are, in this order:
+
+  | Key | Formula | Source | `null` when |
+  | --- | --- | --- | --- |
+  | `total_assets` | Sum of `ASSET` roots | Snapshot | Status not `current` |
+  | `total_liabilities` | Sum of `LIABILITY` roots | Snapshot | Status not `current` |
+  | `total_equity` | Sum of `EQUITY` roots | Snapshot | Status not `current` |
+  | `current_assets` | Asset accounts classified `current` | Snapshot | Status not `current` |
+  | `current_liabilities` | Liability accounts classified `current` | Snapshot | Status not `current` |
+  | `current_ratio` | `current_assets / current_liabilities` | Derived | Status not `current`, or `current_liabilities` is 0 |
+  | `debt_ratio` | `total_liabilities / total_assets × 100` | Derived | Status not `current`, or `total_assets` is 0 |
+  | `current_year_profit_loss` | Posted revenue − expenses from the fiscal-year start through the reporting month | Journals | Never |
+  | `balance_sheet_difference` | `total_assets − (total_liabilities + total_equity + current_year_profit_loss)` | Derived | Status not `current` |
+
+- Amounts are rounded to 2 places. Ratios divide those rounded amounts and are then rounded to 2 places (`debt_ratio` is a percentage). A zero denominator returns `null`, never 0 or infinity. Negative denominators are calculated as stored.
+- Consolidated ratios and the difference use the consolidated amounts (sum of tenant amounts by stable code). Tenant ratios are never added or averaged.
+- `current_year_period` is `{start_year, start_month, end_year, end_month}`. The start is the most recent `accounting.fiscal.start_month` (1–12, default 1) on or before the reporting month. For example, with `start_month = 7`, June 2026 uses July 2025–June 2026, and July 2026 uses July 2026 only. `current_year_profit_loss` reuses `ReportService::profitLossRange()` for that range in each tenant: posted journals only, signed by category normal balance, excluding `OPENING_BALANCE` and `ACCOUNT_OPENING_BALANCE` journals. The consolidated value reuses the code merger above. It does not read snapshots, so it is reported even when the snapshot status is `missing` or `stale`.
+- Current-year profit is counted exactly once. Equity totals contain only `EQUITY` categories, never revenue/expense balances. When a host posts an entry moving profit into equity, that entry also debits/credits the revenue/expense accounts, so the journal-based profit drops by the same amount that equity rises. Profit from earlier fiscal years that was never moved into equity (the package does not post year-end closing entries) remains in `balance_sheet_difference`.
+- Current classification. Each asset/liability account is `current` or `non_current`: an `account_mappings` entry for its stable account code wins, otherwise the nearest ancestor category with a `category_mappings` entry, otherwise `non_current`. Defaults map the seeded `CURRENT_ASSET` and `CURRENT_LIABILITY` categories, so their descendants (cash, receivables, inventory, prepaid) are current. Host overrides are merged over the defaults:
+
+  ```php
+  // config/accounting.php
+  'balance_sheet_summary' => [
+      'account_mappings' => ['1601' => 'current'],            // stable account code => current|non_current
+      'category_mappings' => [
+          'CURRENT_ASSET' => 'current',
+          'CURRENT_LIABILITY' => 'current',
+          'SHORT_TERM_INVESTMENT' => 'current',                // stable category code
+      ],
+  ],
+  ```
+
+  No account names or UUIDs are used. Mappings that apply to equity accounts or codes absent from a tenant have no effect. An invalid shape or a value other than `current`/`non_current` throws `ValidationException` under `balance_sheet_mappings`. An invalid `fiscal.start_month` throws under `fiscal_start_month`.
+- Every tenant runs once per call, through the existing `TenantReportRunner`. In that tenant's transaction database, the method reads `FiscalPeriod`, `MonthlyBalance` and the earliest posted `JournalEntry`, then classifies each requested month:
+
+  | Status | Meaning | Snapshot metrics |
+  | --- | --- | --- |
+  | `current` | The month is closed, and every month from the earliest posted journal through it is closed with non-decreasing `closed_at` (the carry-forward chain is intact), with no legacy-signed snapshot in that chain. | Numbers |
+  | `stale` | Snapshots exist but cannot be trusted. Either the month was reopened (open with retained snapshots), or an earlier month in its chain is open, was closed after it, or holds legacy-signed rows. | `null` |
+  | `missing` | The month is not closed and has no snapshots, for example the current open month or a month before closing started. | `null` |
+
+- Consolidated `status` is `missing` if any tenant is missing, otherwise `stale` if any tenant is stale, otherwise `current`. `snapshots` lists each tenant's own status, so callers can see which tenant blocks the metrics. Unusable months are not queried for balance-sheet amounts. Reclose them in chronological order (or close the missing months) to make them `current`. Closing writes the snapshot rows, so a closed month without rows (no accounts) counts as `current`.
+- Balance signs. Report amounts are natural balances: assets debit-positive; liabilities and equity credit-positive. `closeMonth()` now determines the normal balance case-insensitively. Earlier versions compared the uppercase category type with lowercase names and stored asset/expense snapshots credit-normal (`ending = opening + credit − debit`). An ASSET/EXPENSE snapshot row with non-zero net activity that matches that legacy formula marks its month, and every later month whose chain includes it, as `stale`. Rows seeded without activity totals are never flagged. To repair, reopen the affected months (latest first) and close them again in chronological order from the first legacy month.
+- Validation runs before any tenant is initialized: the year/month (`ProfitLossSummaryCalculator::period()`), the range (`ReportService::profitLossRangePeriod()`), the mappings, `fiscal.start_month` and the full tenant list. Consolidation reuses the code merger and definition-compatibility checks above: for revenue/expense in every month, and for asset/liability/equity in `current` months. The per-tenant method does not merge definitions. Query and initialization failures propagate after the runner restores the caller's tenant and default connection.
+
+Balance-sheet summary example:
+
+```php
+$reports = app(\ESolution\LaravelAccounting\Services\ConsolidatedReportService::class);
+$combined = $reports->balanceSheetSummary(2026, 7, ['tenant-a', 'tenant-b']);
+$byTenant = $reports->balanceSheetSummaryByTenant(2026, 7, ['tenant-a', 'tenant-b']);
+$byMonth = $reports->balanceSheetSummaryByMonth(
+    ['start_year' => 2026, 'start_month' => 6, 'end_year' => 2026, 'end_month' => 8],
+    ['tenant-a', 'tenant-b']
+);
+```
+
+Example `balanceSheetSummary(2026, 7, ['tenant-a', 'tenant-b'])` response:
+
+```json
+{
+  "tenant_ids": ["tenant-a", "tenant-b"],
+  "period": {"year": 2026, "month": 7},
+  "current_year_period": {"start_year": 2026, "start_month": 1, "end_year": 2026, "end_month": 7},
+  "summary": {
+    "status": "current",
+    "total_assets": 875, "total_liabilities": 265, "total_equity": 470,
+    "current_assets": 725, "current_liabilities": 205,
+    "current_ratio": 3.54, "debt_ratio": 30.29,
+    "current_year_profit_loss": 140, "balance_sheet_difference": 0,
+    "snapshots": [{"tenant_id": "tenant-a", "status": "current"}, {"tenant_id": "tenant-b", "status": "current"}]
+  }
+}
+```
+
+The consolidated `current_ratio` is 725 / 205 = 3.54, not the average (3.35) of the tenant ratios 2.5 and 4.2.
+
+Example `balanceSheetSummaryByTenant(2026, 7, ...)` rows:
+
+```json
+[
+  {"tenant_id": "tenant-a", "status": "current", "total_assets": 300, "total_liabilities": 100, "total_equity": 120,
+   "current_assets": 200, "current_liabilities": 80, "current_ratio": 2.5, "debt_ratio": 33.33,
+   "current_year_profit_loss": 80, "balance_sheet_difference": 0},
+  {"tenant_id": "tenant-b", "status": "stale", "total_assets": null, "total_liabilities": null, "total_equity": null,
+   "current_assets": null, "current_liabilities": null, "current_ratio": null, "debt_ratio": null,
+   "current_year_profit_loss": 60, "balance_sheet_difference": null}
+]
+```
+
+(tenant-b's July was reopened.)
+
+Example `balanceSheetSummaryByMonth()` entry for an open August:
+
+```json
+{"period": {"year": 2026, "month": 8},
+ "current_year_period": {"start_year": 2026, "start_month": 1, "end_year": 2026, "end_month": 8},
+ "summary": {"status": "missing", "total_assets": null, "total_liabilities": null, "total_equity": null,
+   "current_assets": null, "current_liabilities": null, "current_ratio": null, "debt_ratio": null,
+   "current_year_profit_loss": 140, "balance_sheet_difference": null,
+   "snapshots": [{"tenant_id": "tenant-a", "status": "missing"}, {"tenant_id": "tenant-b", "status": "missing"}]}}
+```
+
+Balance-sheet profit detail rules:
+
+- These figures are informational. They are never added to `total_equity`, `total_liabilities`, `balance_sheet_difference` or any balance-sheet tree, so profit already transferred into equity is not counted twice. Snapshots and fiscal-period status are not read. Open, reopened and never-closed months are calculated the same way. The response therefore has no `status`.
+- `prior_months_profit_loss` is the posted revenue/expense movement dated before the first day of the requested month, with no lower bound, so every prior fiscal year is included. `accounting.fiscal.start_month` does not reset it.
+- `current_month_profit_loss` is the posted movement from the first to the last day of the requested month.
+- Profit is `Σ credit − Σ debit` over journal details whose account belongs to a `REVENUE` or `EXPENSE` category (revenue − expense). Accounts and category types come from the existing account/category repositories in the tenant context. No account IDs or names are used. Only `posted` journals count. Amounts are rounded to 2 places. `prior_months_profit_loss + current_month_profit_loss` is the cumulative operating profit through the month's end.
+- Excluded journals:
+
+  | Marker | Default values | Meaning |
+  | --- | --- | --- |
+  | `journal_entries.source_type` | `OPENING_BALANCE`, `ACCOUNT_OPENING_BALANCE` (always) | Opening-balance journals (`journalOpeningBalance()`, `AccountOpeningBalanceService`) |
+  | Journal service (`service_id` → `acc_services.service_code`) | `accounting.profit_loss_detail.closing_service_codes`: `MONTH_END_CLOSING`, `YEAR_END_CLOSING` | Profit transfers posted with `journalByMapping()` using the existing closing service templates (revenue → Income Summary 3301 → expense; 3301 → Retained Earnings 3101) |
+  | `journal_entries.source_type` | `accounting.profit_loss_detail.closing_source_types`: `MONTH_END_CLOSING`, `YEAR_END_CLOSING` | Manual closing transfers, e.g. `journalManual(['source_type' => 'MONTH_END_CLOSING', ...])` |
+
+  Reversals copy `service_id` and `source_type`, so reversing a closing transfer is excluded too. Service codes are resolved to IDs through `ServiceRepository` in each tenant's master-data context (shared master or tenant-local). They are never joined across connections.
+- Configuration:
+
+  ```php
+  // config/accounting.php
+  'profit_loss_detail' => [
+      'closing_service_codes' => ['MONTH_END_CLOSING', 'YEAR_END_CLOSING'],
+      'closing_source_types' => ['MONTH_END_CLOSING', 'YEAR_END_CLOSING'],
+  ],
+  ```
+
+  A missing key keeps its default, and `[]` disables that marker. Use `[]` for `closing_service_codes` if your host posts genuine profit-affecting adjustments (for example accruals) under `MONTH_END_CLOSING`. Values must be lists of non-empty strings, otherwise a `ValidationException` is thrown under `profit_loss_detail`.
+- Contrast with the balance-sheet summary's `current_year_profit_loss`, which excludes only opening journals. That metric nets closing transfers so that `balance_sheet_difference` counts profit exactly once. The profit detail methods report actual profit instead.
+- Validation runs before any tenant is initialized: the year/month (`ProfitLossSummaryCalculator::period()`), the range (`ReportService::profitLossRangePeriod()`), the markers and the full tenant list. Each tenant runs once per call through `TenantReportRunner`. Journals are read on the tenant's transaction connection, and accounts, categories and services through the master-data resolver. The consolidated amount is the sum of tenant amounts, and accounts are not merged by code. Query and initialization failures propagate after the caller's tenant and default connection are restored.
+
+Profit detail example:
+
+```php
+$reports = app(\ESolution\LaravelAccounting\Services\ConsolidatedReportService::class);
+$combined = $reports->balanceSheetProfitDetail(2026, 7, ['tenant-a', 'tenant-b']);
+$byTenant = $reports->balanceSheetProfitDetailByTenant(2026, 7, ['tenant-a', 'tenant-b']);
+$byMonth = $reports->balanceSheetProfitDetailByMonth(
+    ['start_year' => 2026, 'start_month' => 6, 'end_year' => 2026, 'end_month' => 7],
+    ['tenant-a', 'tenant-b']
+);
+$single = app(\ESolution\LaravelAccounting\Services\ReportService::class)->profitLossDetail(2026, 7); // active context
+```
+
+Two months with closing transfers. Tenant-a earns 50 in June and 30 in July. Tenant-b earns 100 in June and loses 40 in July. Both post month-end closing entries that move profit into equity.
+
+```json
+// balanceSheetProfitDetail(2026, 7, ...)
+{"tenant_ids": ["tenant-a", "tenant-b"], "period": {"year": 2026, "month": 7},
+ "summary": {"prior_months_profit_loss": 150, "current_month_profit_loss": -10}}
+
+// balanceSheetProfitDetailByTenant(2026, 7, ...)
+{"tenant_ids": ["tenant-a", "tenant-b"], "period": {"year": 2026, "month": 7},
+ "summaries": [
+   {"tenant_id": "tenant-a", "prior_months_profit_loss": 50, "current_month_profit_loss": 30},
+   {"tenant_id": "tenant-b", "prior_months_profit_loss": 100, "current_month_profit_loss": -40}]}
+
+// balanceSheetProfitDetailByMonth(June–July, ...)
+{"tenant_ids": ["tenant-a", "tenant-b"],
+ "period": {"year": 2026, "month": 7, "start_year": 2026, "start_month": 6, "end_year": 2026, "end_month": 7},
+ "summaries": [
+   {"period": {"year": 2026, "month": 6}, "summary": {"prior_months_profit_loss": 0, "current_month_profit_loss": 150}},
+   {"period": {"year": 2026, "month": 7}, "summary": {"prior_months_profit_loss": 150, "current_month_profit_loss": -10}}]}
+```
+
+Without the exclusions, the closing entries would bring these figures down to the untransferred remainder. Year rollover: profit of 180 in November–December 2025 followed by 15 in January 2026 gives January 2026 `{"prior_months_profit_loss": 180, "current_month_profit_loss": 15}`.
 
 Consolidation rules (for methods that combine tenants):
 

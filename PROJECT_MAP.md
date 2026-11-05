@@ -80,6 +80,75 @@ Scoped monthly execution policy: `config/accounting.php::closing.closing_day` is
 
 Removed `closing.shared_connection` (`ACCOUNTING_CLOSING_SHARED_CONNECTION`) and `closing.tenant_ids`; values left in a host's published config are ignored. `FiscalPeriodService::cutoffConnection()` now resolves shared storage through `AccountingConnectionResolver::masterConnectionName()` (`ACCOUNTING_MASTER_CONNECTION`) and does not depend on `ACCOUNTING_USE_SHARED_DATABASE`. With that flag false, master data stays on each tenant connection and only the shared cutoff tables live on the master connection. The central migration still delegates to `cutoffConnection()`, so it now targets the master connection. `ClosingService::changeSharedCutoff()` takes participants from the explicit `$tenantIds` argument, otherwise the persisted `shared_closing_cutoffs.tenant_ids`. Before the first scope is persisted, an omitted list fails with a `tenant_ids` validation error, which also applies to `closeThroughCurrentMonth()` because it has no tenant argument. Unsupported shared-mode combinations fail explicitly: master connection unset or undefined, or equal to a participating tenant transaction connection (this includes single-database installs). Journals, fiscal periods, snapshots, per-tenant cutoffs, locking order, connection overrides and tenancy restoration are unchanged. `tests/Feature/ClosingCutoffTest.php` covers both master modes, ignored legacy keys, the missing first scope, and the unsupported combinations.
 
+## Scoped update: balance-sheet summaries (2026-11-05)
+
+`src/Services/ConsolidatedReportService.php` adds `balanceSheetSummary($year, $month, array $tenantIds)` (`{tenant_ids, period, summary}`), `balanceSheetSummaryByTenant($year, $month, array $tenantIds)` (`{tenant_ids, period, summaries: [{tenant_id, status, total_*}]}`) and `balanceSheetSummaryByMonth(array $range, array $tenantIds)` (`{tenant_ids, period (six-field), summaries: [{period: {year, month}, summary}]}`). Validation reuses `ProfitLossSummaryCalculator::period()` and `ReportService::profitLossRangePeriod()`. One `TenantReportRunner` pass per tenant collects definitions, per-month snapshot statuses, and `ReportService::balanceSheet()` payloads for usable months only. Consolidation reuses `mergeSources()`/`sumRoots()` per month; months are never summed.
+
+The protected `balanceSheetSnapshotStatuses()` reads `FiscalPeriod`, grouped `MonthlyBalance` counts and the earliest posted `JournalEntry.trx_date` from the active transaction connection. It reports `current` (closed, with every month from the earliest posted journal closed in non-decreasing `closed_at` order), `stale` (reopened with retained rows, or a broken or out-of-order carry-forward chain) or `missing` (open without rows). Unusable months return `null` totals plus per-tenant `snapshots`, never zeros. No routes, bindings, migrations, cache or existing responses change.
+
+Totals inherit stored snapshot signs. The closing type-case mismatch was confirmed at runtime (an asset snapshot of −1400 against a live balance of 1400) and is fixed by the dashboard-metrics update below. `tests/Feature/BalanceSheetSummaryServicesTest.php` covers both master modes, alias deduplication, by-tenant separation, chronological and cross-year months, stale and missing scenarios, real close/reopen, validation before tenant initialization, query-failure restoration and definition conflicts.
+
+## Scoped update: balance-sheet dashboard metrics (2026-11-05)
+
+The three `ConsolidatedReportService` balance-sheet summary methods now also return:
+- `current_assets` and `current_liabilities`;
+- `current_ratio` and `debt_ratio` (×100), each `null` on a zero denominator;
+- `current_year_profit_loss`;
+- `balance_sheet_difference` = assets − (liabilities + equity + current-year profit/loss).
+
+The single-month responses gain a top-level `current_year_period`. Each `ByMonth` entry gains one as well. Consolidated ratios and the difference come from consolidated amounts.
+
+How the values are produced:
+- **Classification:** current/non-current uses the new `accounting.balance_sheet_summary` stable-code mappings. These follow `profit_loss_summary` precedence: an account mapping first, then the nearest mapped ancestor category, otherwise non-current. Defaults are `CURRENT_ASSET`/`CURRENT_LIABILITY`.
+- **Profit/loss:** current-year profit/loss reuses `ReportService::profitLossRange()`, which reads posted journals and excludes opening-source journals. The range runs from the previously unused `accounting.fiscal.start_month` through the reporting month. It is merged with `mergeSources()` in the same single runner pass. It does not depend on snapshots, so it is present even for `missing`/`stale` months.
+- **Validation:** mappings and the fiscal start month are validated before any tenant is initialized.
+
+Sign fix: `src/Services/ClosingService.php` `closeMonthlyPeriod()` now compares category types case-insensitively, so new asset/expense snapshots are debit-normal.
+
+Legacy snapshots:
+- The new protected `legacySignedSnapshotMonths()` finds older rows from debit-normal accounts that match `ending = opening + credit − debit` and have non-zero net activity.
+- It uses the same account/category sources as closing, with ids chunked so no cross-connection join is needed.
+- `balanceSheetSnapshotStatuses()` treats any such month in a target's carry-forward chain as `stale`.
+
+No routes, bindings, migrations, cache or consumers of other methods change. `tests/Feature/BalanceSheetSummaryServicesTest.php` was expanded to 33 tests. These cover:
+- metrics in both master modes;
+- consolidated ratios versus averaged tenant ratios;
+- the fiscal start month;
+- mapping overrides and null ratios on zero denominators;
+- legacy-sign staleness;
+- a real close that stores natural signs, with a profit-to-equity entry counted once;
+- configuration validation before tenant runs.
+
+## Scoped update: balance-sheet profit details (2026-11-05)
+
+`src/Services/ConsolidatedReportService.php` adds three methods:
+- `balanceSheetProfitDetail($year, $month, array $tenantIds)` returns `{tenant_ids, period, summary}`.
+- `balanceSheetProfitDetailByTenant(...)` returns `{tenant_ids, period, summaries: [{tenant_id, ...}]}`.
+- `balanceSheetProfitDetailByMonth(array $range, array $tenantIds)` returns `{tenant_ids, period (six-field), summaries: [{period, summary}]}`.
+
+Each `summary` holds `prior_months_profit_loss` (all posted movements before the month, prior fiscal years included) and `current_month_profit_loss`. The consolidated value is the sum of tenant amounts.
+
+`src/Services/ReportService.php` adds the single-tenant calculation:
+- `profitLossDetail($year, $month, ?array $tenantIds = null)`, which follows the `balanceSheet()` tenant convention;
+- `profitLossDetailMarkers()`.
+
+How the calculation works:
+- **Movements:** it sums credit − debit for posted details on accounts whose `REVENUE`/`EXPENSE` category comes from the existing repositories.
+- **Exclusions:** opening-source journals are excluded, as are journals marked as profit transfers. A transfer is marked either by a service whose code is in the new `accounting.profit_loss_detail.closing_service_codes`, or by a `source_type` in `closing_source_types`. Both default to the existing `MONTH_END_CLOSING`/`YEAR_END_CLOSING` codes; a missing key keeps its default and `[]` disables it.
+- **Reversals** copy both markers.
+- **Service IDs** are resolved through `ServiceRepository` in the tenant's master-data context, so no cross-connection join is needed.
+- **Validation:** markers are validated before tenant runs.
+
+The figures are informational. They are not added to equity, the balance-sheet summary metrics or snapshots, and no fiscal status is read. No routes, bindings, migrations or existing responses change.
+
+`tests/Feature/BalanceSheetSummaryServicesTest.php` adds profit-detail tests covering:
+- two months in all three scopes, in both master modes;
+- service-marked and source-type closing transfers, a marker-carrying reversal, and opening journals;
+- marker configuration;
+- year rollover;
+- validation before tenant runs;
+- failure restoration.
+
 ## Evidence and scope
 
 - **Verified from source:** Composer metadata, all package PHP classes, routes, configuration, migrations, seeder implementations and representative localized data, hook stubs, and test definitions were inspected. Existing documentation was checked against source.
@@ -128,7 +197,9 @@ All keys are in `config/accounting.php`.
 | `journal.auto_post` | `true` | Controls posting after **mapped** journal creation; manual/opening journals post immediately regardless |
 | `journal.number_format` | `JV/{YEAR}/{MONTH}/{SEQ}` | Number substitution in `JournalService::generateJournalNo()` |
 | `profit_loss_summary` | Literal `account_mappings` / `category_mappings` arrays | Editable in the host's published config and compatible with config caching; additive stable-code classifications for the two summary entry points only; account rules override category rules |
-| `fiscal.start_month` | `1` | Declared configuration; no runtime consumer found in `src/` |
+| `fiscal.start_month` | `1` | Fiscal-year start month (1–12); consumed only by `ConsolidatedReportService` balance-sheet summaries for `current_year_profit_loss` (validated before tenant runs) |
+| `balance_sheet_summary` | `category_mappings`: `CURRENT_ASSET`/`CURRENT_LIABILITY` => `current`; empty `account_mappings` | Stable code => `current`/`non_current` for balance-sheet summary current ratio; merged over `ConsolidatedReportService::DEFAULT_BALANCE_SHEET_MAPPINGS`; account overrides beat nearest mapped ancestor category; unmapped = non-current |
+| `profit_loss_detail` | `closing_service_codes` and `closing_source_types`: `MONTH_END_CLOSING`, `YEAR_END_CLOSING` | Journal markers excluded as profit transfers by balance-sheet profit details (with opening-balance source types, always excluded); missing key keeps default, `[]` disables |
 | `closing.closing_day` | `env('ACCOUNTING_CLOSING_DAY')` (null) | Earliest month-close execution day: null (unrestricted), 1–31 (clamped), or `month_end` |
 | `closing.closing_day_month` | `env('ACCOUNTING_CLOSING_DAY_MONTH', 'next')` | Month the closing day belongs to: `current` or `next` |
 | `closing.cutoff_enabled` | `env('ACCOUNTING_CLOSING_CUTOFF_ENABLED', false)` | Enables persisted inclusive date cutoffs |
@@ -199,8 +270,8 @@ These public methods are integration surfaces even when no route exposes them. C
 | `FiscalPeriodService` | `ensureForDate($date): FiscalPeriod`, `ensureForJournalDate($date): FiscalPeriod`, `ensureThroughCurrentMonth(?Carbon = null): Collection` |
 | `ClosingService` | `closeMonth($year, $month, $userId = null)`, `closeThroughCurrentMonth($userId = null)`, alias `closeUntilCurrentMonth($userId = null)`, `reopenMonth($year, $month, $userId = null)` |
 | `GeneralLedgerService` | `getLedger(string, int, int): array`; `getLedgerDetails(string $accountId, int $year, int $month, string\|int\|null $tenant = null, ?int $page = null, ?int $perPage = null): GeneralLedgerPaginator`; `getDetails(string, string, string, float, bool): array` |
-| `ReportService` | `generalLedger($accountId, $startDate, $endDate)` returns account/path and opening balance only; `trialBalance($year, $month)`, `cashFlow(...)` return report arrays; `profitLoss($year, $month, ?array $tenantIds = null)` and `balanceSheet(...)` additionally support separate per-tenant payloads through `TenantReportRunner` |
-| `ConsolidatedReportService` | `profitLoss($year, $month, array $tenantIds): array`, `balanceSheet(...)`: canonical tenant IDs, year/month and one arithmetic report; `profitLossSummary(...)`: same required arguments and `{tenant_ids, period, summary}` with nine components and four profit values; `profitLossSummaryByTenant($year, $month, array $tenantIds): array` / `profitLossSummaryRangeByTenant(array $range, array $tenantIds): array`: compact, separate tenant rows with four calculated profits; `categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array`: full merged chart and source UUID/code aliases for service retrieval |
+| `ReportService` | `generalLedger($accountId, $startDate, $endDate)` returns account/path and opening balance only; `trialBalance($year, $month)`, `cashFlow(...)` return report arrays; `profitLoss($year, $month, ?array $tenantIds = null)` and `balanceSheet(...)` additionally support separate per-tenant payloads through `TenantReportRunner`; `profitLossDetail($year, $month, ?array $tenantIds = null)` returns `{prior_months_profit_loss, current_month_profit_loss}` (runner rows with tenant IDs) and `profitLossDetailMarkers()` returns validated closing markers |
+| `ConsolidatedReportService` | `profitLoss($year, $month, array $tenantIds): array`, `balanceSheet(...)`: canonical tenant IDs, year/month and one arithmetic report; `profitLossSummary(...)`: same required arguments and `{tenant_ids, period, summary}` with nine components and four profit values; `profitLossSummaryByTenant($year, $month, array $tenantIds): array` / `profitLossSummaryRangeByTenant(array $range, array $tenantIds): array`: compact, separate tenant rows with four calculated profits; `categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array`: full merged chart and source UUID/code aliases for service retrieval; `balanceSheetSummary($year, $month, array $tenantIds)` / `balanceSheetSummaryByTenant(...)` / `balanceSheetSummaryByMonth(array $range, array $tenantIds)`: month-end asset/liability/equity totals, current assets/liabilities, `current_ratio`, `debt_ratio`, journal-based `current_year_profit_loss` and `balance_sheet_difference`, plus `current_year_period`, with `current`/`stale`/`missing` snapshot status and null snapshot metrics when unusable; `balanceSheetProfitDetail(...)` / `balanceSheetProfitDetailByTenant(...)` / `balanceSheetProfitDetailByMonth(...)`: informational `prior_months_profit_loss` / `current_month_profit_loss` excluding opening and closing-transfer journals |
 | `ProfitLossSummaryService` | `summarize($year, $month, array $tenantIds): array`: required tenant list and period; separate tenant summaries with nine classified components and four calculated profit values |
 | `Support\ServiceCatalog` | `all()`, group methods `sales()`, `salesVat()`, `purchase()`, `inventory()`, `finance()`, `expense()`, `payroll()`, `asset()`, `receivable()`, `payable()`, `tax()`, `closing()`, `find(string\|AccountingServiceCode)`, `normalizeCode(...)` (string input is unchanged) |
 | `Support\ServiceAccountTemplateRegistry` | `all()` returns definitions grouped by service code; `forService(string\|AccountingServiceCode)` returns templates or `[]` |
@@ -446,7 +517,7 @@ These are investigation findings, not changes authorized by this map. Preserve c
 | --- | --- |
 | Tenant isolation is partial | `BaseController` continues after unresolved tenant initialization; unscoped repository methods remain widely used. Path/header identifiers are not authorization. Inference: an invalid tenant or mismatched host lifecycle can execute against the current/default database. |
 | Header-only cache partitioning is incomplete | `JournalController` / `ServiceController` use path-tenant tags and generic keys; no header/default-connection identity in those keys. Inference: shared cache with header-driven database switching can reuse another context's cached records. Account/category ownership keys mitigate only their specific paths. |
-| Closing type comparison mismatch | `AccountCategory::getTypeAttribute()` returns uppercase, but `ClosingService::closeMonth()` compares category types to lowercase `asset`/`expense`. Static risk: real asset/expense snapshots can use credit-normal arithmetic, unlike the live balance engine. Not runtime reproduced here. |
+| Closing type comparison mismatch (fixed 2026-11-05) | `ClosingService::closeMonth()` compared the uppercase `AccountCategory` type with lowercase `asset`/`expense`, so asset/expense snapshots were stored credit-normal (runtime confirmed: −1400 against a live 1400). It now compares case-insensitively. Snapshots written before the fix are not rewritten; balance-sheet summaries report months whose chain contains them as `stale`. Other snapshot readers (`balanceSheet()`, `profitLoss()`, `trialBalance()`) still show such legacy rows as stored until the months are reclosed. |
 | Reopened snapshots remain authoritative | `ClosingService::reopenMonth()` does not delete snapshots; `AccountBalanceService` uses any matching snapshot without checking period closure, and financial reports read snapshots only. Inference: post-reopen changes can leave stale reported balances until recomputed. |
 | Closing can skip historical carry | `closeMonth()` uses only immediately preceding monthly snapshots; it neither ensures earlier months were closed nor uses the live engine to reconstruct skipped activity. Balance check is aggregate for the period, not each journal; drafts do not block close. |
 | Reversal checks original period, not new period | `validateReversal()` checks original date/year; new posted reversal is dated now without `checkPeriodLocked(now())`. Static risk: reversal may be written into a closed current month. |

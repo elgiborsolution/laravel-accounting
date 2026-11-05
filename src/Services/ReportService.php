@@ -6,8 +6,10 @@ use ESolution\LaravelAccounting\Enums\JournalStatus;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
+use ESolution\LaravelAccounting\Repositories\ServiceRepository;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\ProfitLossSummaryCalculator;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -16,6 +18,12 @@ use Illuminate\Validation\ValidationException;
 
 class ReportService
 {
+    /** Existing closing service codes (AccountingServiceCode) used as profit-transfer markers. */
+    protected const DEFAULT_PROFIT_LOSS_DETAIL_MARKERS = [
+        'closing_service_codes' => ['MONTH_END_CLOSING', 'YEAR_END_CLOSING'],
+        'closing_source_types' => ['MONTH_END_CLOSING', 'YEAR_END_CLOSING'],
+    ];
+
     public function __construct(
         protected AccountCategoryTreeService $treeService,
         protected AccountCategoryRepository $categories,
@@ -186,6 +194,109 @@ class ReportService
             'total_liabilities' => $this->sumNodes($liability),
             'total_equity' => $this->sumNodes($equity),
         ];
+    }
+
+    /**
+     * Informational profit/loss for a balance-sheet month, from posted revenue/expense movements:
+     * everything dated before the month (all prior fiscal years included) and within the month.
+     * Opening-balance and profit-transfer closing journals are excluded, so closing transfers into
+     * equity do not erase the figures. Never added to balance-sheet equity.
+     */
+    public function profitLossDetail($year, $month, ?array $tenantIds = null): array
+    {
+        $period = app(ProfitLossSummaryCalculator::class)->period($year, $month);
+        $markers = $this->profitLossDetailMarkers();
+        if ($tenantIds !== null) {
+            return app(TenantReportRunner::class)->run($tenantIds, fn () => $this->buildProfitLossDetail($period, $markers));
+        }
+
+        return $this->buildProfitLossDetail($period, $markers);
+    }
+
+    /**
+     * Validated journal markers treated as profit transfers: service codes (journalByMapping
+     * service_id) and source_type values, in addition to the opening-balance source types.
+     */
+    public function profitLossDetailMarkers(): array
+    {
+        $configured = config('accounting.profit_loss_detail', []);
+        $markers = [];
+        foreach (self::DEFAULT_PROFIT_LOSS_DETAIL_MARKERS as $key => $defaults) {
+            // A missing key keeps the defaults (older published configs); an explicit [] disables it.
+            $values = is_array($configured) ? (array_key_exists($key, $configured) ? $configured[$key] : $defaults) : null;
+            if (! is_array($values) || array_filter($values, fn ($value) => ! is_string($value) || trim($value) === '') !== []) {
+                throw ValidationException::withMessages([
+                    'profit_loss_detail' => ['accounting.profit_loss_detail.'.$key.' must be a list of non-empty strings.'],
+                ]);
+            }
+            $markers[$key] = array_values(array_unique($values));
+        }
+
+        return $markers;
+    }
+
+    protected function buildProfitLossDetail(array $period, array $markers): array
+    {
+        $types = $this->categories->allOrdered()->pluck('type', 'id');
+        $normal = [];
+        foreach ($this->accounts->allOrdered() as $account) {
+            $type = $types->get($account->category_id);
+            if (in_array($type, ['REVENUE', 'EXPENSE'], true)) {
+                $normal[$account->id] = $type;
+            }
+        }
+        // Services are master data: resolve ids through the repository, never by cross-connection join.
+        $serviceIds = $markers['closing_service_codes'] === [] ? [] : app(ServiceRepository::class)->all()
+            ->filter(fn ($service) => in_array($service->service_code, $markers['closing_service_codes'], true))
+            ->modelKeys();
+        $start = Carbon::create($period['year'], $period['month'], 1);
+        $profit = function (?string $from, string $to, bool $inclusive) use ($normal, $serviceIds, $markers) {
+            $total = 0.0;
+            // Revenue (credit-normal) minus expense (debit-normal) = credit - debit across both.
+            foreach ($this->profitLossDetailMovements(array_keys($normal), $from, $to, $inclusive, $serviceIds, $markers['closing_source_types']) as $movement) {
+                $total += (float) $movement->total_credit - (float) $movement->total_debit;
+            }
+
+            return round($total, 2);
+        };
+
+        return [
+            'prior_months_profit_loss' => $profit(null, $start->toDateString(), false),
+            'current_month_profit_loss' => $profit($start->toDateString(), $start->copy()->endOfMonth()->toDateString(), true),
+        ];
+    }
+
+    protected function profitLossDetailMovements(
+        array $accountIds, ?string $from, string $to, bool $inclusive, array $serviceIds, array $closingSourceTypes
+    ): Collection {
+        if ($accountIds === []) {
+            return collect();
+        }
+
+        $connection = DB::connection($this->transactionConnection());
+        $details = $this->tables->table('journal_entry_details');
+        $journals = $this->tables->table('journal_entries');
+        $grammar = $connection->getQueryGrammar();
+        $excludedSourceTypes = array_values(array_unique(array_merge(
+            ['OPENING_BALANCE', AccountOpeningBalanceService::SOURCE_TYPE], $closingSourceTypes
+        )));
+
+        return $connection->table($details)
+            ->join($journals, $journals.'.id', '=', $details.'.journal_entry_id')
+            ->whereIn($details.'.account_id', $accountIds)
+            ->when($from !== null, fn ($query) => $query->whereDate($journals.'.trx_date', '>=', $from))
+            ->whereDate($journals.'.trx_date', $inclusive ? '<=' : '<', $to)
+            ->where($journals.'.status', JournalStatus::POSTED->value)
+            ->where(fn ($query) => $query->whereNull($journals.'.source_type')
+                ->orWhereNotIn($journals.'.source_type', $excludedSourceTypes))
+            ->when($serviceIds !== [], fn ($query) => $query->where(fn ($inner) => $inner->whereNull($journals.'.service_id')
+                ->orWhereNotIn($journals.'.service_id', $serviceIds)))
+            ->groupBy($details.'.account_id')
+            ->select($details.'.account_id')
+            ->selectRaw('SUM('.$grammar->wrap($details.'.debit').') as total_debit')
+            ->selectRaw('SUM('.$grammar->wrap($details.'.credit').') as total_credit')
+            ->get()
+            ->keyBy('account_id');
     }
 
     /**

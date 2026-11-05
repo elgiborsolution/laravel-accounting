@@ -2,16 +2,28 @@
 
 namespace ESolution\LaravelAccounting\Services;
 
+use ESolution\LaravelAccounting\Enums\JournalStatus;
+use ESolution\LaravelAccounting\Models\Account;
+use ESolution\LaravelAccounting\Models\FiscalPeriod;
+use ESolution\LaravelAccounting\Models\JournalEntry;
+use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Support\ProfitLossSummaryCalculator;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
 class ConsolidatedReportService
 {
+    /** Default current/non-current classification by stable code; see accounting.balance_sheet_summary. */
+    protected const DEFAULT_BALANCE_SHEET_MAPPINGS = [
+        'account_mappings' => [],
+        'category_mappings' => ['CURRENT_ASSET' => 'current', 'CURRENT_LIABILITY' => 'current'],
+    ];
+
     public function __construct(
         protected ReportService $reports,
         protected TenantReportRunner $tenants,
@@ -90,6 +102,361 @@ class ConsolidatedReportService
         return $this->tenantSummaryTotals(
             app(ProfitLossSummaryService::class)->summarizeRange($range, $tenantIds)
         );
+    }
+
+    /**
+     * Consolidated month-end position and dashboard metrics. Snapshot-derived values are null
+     * unless every tenant snapshot is current; ratios use consolidated amounts.
+     */
+    public function balanceSheetSummary($year, $month, array $tenantIds): array
+    {
+        $period = app(ProfitLossSummaryCalculator::class)->period($year, $month);
+        [$months, $mappings] = $this->balanceSheetSummaryInputs([$period]);
+        $sources = $this->balanceSheetSources($months, $tenantIds);
+
+        return [
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'period' => $period,
+            'current_year_period' => $months[0]['current_year_period'],
+            'summary' => $this->consolidatedBalanceSheetSummary($sources, 0, $mappings),
+        ];
+    }
+
+    /** Separate month-end position and metrics per tenant; never combines tenant amounts. */
+    public function balanceSheetSummaryByTenant($year, $month, array $tenantIds): array
+    {
+        $period = app(ProfitLossSummaryCalculator::class)->period($year, $month);
+        [$months, $mappings] = $this->balanceSheetSummaryInputs([$period]);
+        $sources = $this->balanceSheetSources($months, $tenantIds);
+
+        return [
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'period' => $period,
+            'current_year_period' => $months[0]['current_year_period'],
+            'summaries' => array_map(function (array $source) use ($mappings) {
+                $month = $source['report']['months'][0];
+
+                return ['tenant_id' => $source['tenant_id'], 'status' => $month['status']]
+                    + $this->balanceSheetMetrics($month['payload']['data'] ?? null, (float) $month['profit_loss']['net_income'], $mappings);
+            }, $sources),
+        ];
+    }
+
+    /** One consolidated month-end summary per month in the inclusive range; months are never added together. */
+    public function balanceSheetSummaryByMonth(array $range, array $tenantIds): array
+    {
+        $period = $this->reports->profitLossRangePeriod($range);
+        $months = [];
+        for ($index = $period['start_year'] * 12 + $period['start_month'] - 1;
+            $index <= $period['end_year'] * 12 + $period['end_month'] - 1; $index++) {
+            $months[] = ['year' => intdiv($index, 12), 'month' => $index % 12 + 1];
+        }
+        [$months, $mappings] = $this->balanceSheetSummaryInputs($months);
+        $sources = $this->balanceSheetSources($months, $tenantIds);
+
+        return [
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'period' => $period,
+            'summaries' => array_map(fn (array $month, int $position) => [
+                'period' => ['year' => $month['year'], 'month' => $month['month']],
+                'current_year_period' => $month['current_year_period'],
+                'summary' => $this->consolidatedBalanceSheetSummary($sources, $position, $mappings),
+            ], $months, array_keys($months)),
+        ];
+    }
+
+    /**
+     * Informational consolidated profit/loss for a balance-sheet month: posted movements before
+     * the month and within it, excluding opening and profit-transfer closing journals. Not part of,
+     * and never added to, balance-sheet equity totals.
+     */
+    public function balanceSheetProfitDetail($year, $month, array $tenantIds): array
+    {
+        $period = app(ProfitLossSummaryCalculator::class)->period($year, $month);
+        $sources = $this->profitDetailSources([$period], $tenantIds);
+
+        return [
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'period' => $period,
+            'summary' => $this->consolidatedProfitDetail($sources, 0),
+        ];
+    }
+
+    /** Separate informational profit/loss per tenant; never combines tenant amounts. */
+    public function balanceSheetProfitDetailByTenant($year, $month, array $tenantIds): array
+    {
+        $period = app(ProfitLossSummaryCalculator::class)->period($year, $month);
+        $sources = $this->profitDetailSources([$period], $tenantIds);
+
+        return [
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'period' => $period,
+            'summaries' => array_map(fn (array $source) => ['tenant_id' => $source['tenant_id']] + $source['report'][0], $sources),
+        ];
+    }
+
+    /** One consolidated profit detail per month in the inclusive range, in chronological order. */
+    public function balanceSheetProfitDetailByMonth(array $range, array $tenantIds): array
+    {
+        $period = $this->reports->profitLossRangePeriod($range);
+        $months = [];
+        for ($index = $period['start_year'] * 12 + $period['start_month'] - 1;
+            $index <= $period['end_year'] * 12 + $period['end_month'] - 1; $index++) {
+            $months[] = ['year' => intdiv($index, 12), 'month' => $index % 12 + 1];
+        }
+        $sources = $this->profitDetailSources($months, $tenantIds);
+
+        return [
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'period' => $period,
+            'summaries' => array_map(fn (array $month, int $position) => [
+                'period' => $month,
+                'summary' => $this->consolidatedProfitDetail($sources, $position),
+            ], $months, array_keys($months)),
+        ];
+    }
+
+    /** Validate closing markers before any tenant is initialized, then run each tenant once. */
+    protected function profitDetailSources(array $months, array $tenantIds): array
+    {
+        $this->reports->profitLossDetailMarkers();
+
+        return $this->tenants->run($tenantIds, fn () => array_map(
+            fn (array $month) => $this->reports->profitLossDetail($month['year'], $month['month']),
+            $months
+        ));
+    }
+
+    protected function consolidatedProfitDetail(array $sources, int $position): array
+    {
+        $summary = [];
+        foreach (['prior_months_profit_loss', 'current_month_profit_loss'] as $key) {
+            $summary[$key] = round(array_sum(array_map(fn (array $source) => $source['report'][$position][$key], $sources)), 2);
+        }
+
+        return $summary;
+    }
+
+    /**
+     * Validate host configuration before any tenant is initialized and attach each month's
+     * fiscal-year-to-date range (accounting.fiscal.start_month through the reporting month).
+     */
+    protected function balanceSheetSummaryInputs(array $months): array
+    {
+        $mappings = $this->balanceSheetMappings();
+        $startMonth = config('accounting.fiscal.start_month', 1);
+        validator(['fiscal_start_month' => $startMonth], [
+            'fiscal_start_month' => ['required', 'integer', 'between:1,12'],
+        ])->validate();
+        $startMonth = (int) $startMonth;
+
+        return [array_map(fn (array $month) => $month + ['current_year_period' => [
+            'start_year' => $month['month'] >= $startMonth ? $month['year'] : $month['year'] - 1,
+            'start_month' => $startMonth,
+            'end_year' => $month['year'],
+            'end_month' => $month['month'],
+        ]], $months), $mappings];
+    }
+
+    /**
+     * Stable code => current|non_current for asset and liability accounts. Account overrides win
+     * over the nearest mapped ancestor category; unmapped accounts are non-current.
+     */
+    protected function balanceSheetMappings(): array
+    {
+        $invalid = fn (string $message) => throw ValidationException::withMessages(['balance_sheet_mappings' => [$message]]);
+        $configured = config('accounting.balance_sheet_summary', []);
+        if (! is_array($configured)) {
+            $invalid('Balance-sheet summary mappings must be an array.');
+        }
+
+        $mappings = [];
+        foreach (self::DEFAULT_BALANCE_SHEET_MAPPINGS as $kind => $defaults) {
+            $overrides = array_key_exists($kind, $configured) ? $configured[$kind] : [];
+            if (! is_array($overrides)) {
+                $invalid('Balance-sheet summary '.$kind.' must be an array.');
+            }
+            foreach ($overrides as $code => $classification) {
+                if (trim((string) $code) === '' || ! in_array($classification, ['current', 'non_current'], true)) {
+                    $invalid('Invalid balance-sheet classification for '.$kind.' code ['.$code.'].');
+                }
+            }
+            $mappings[$kind] = array_replace($defaults, $overrides);
+        }
+
+        return $mappings;
+    }
+
+    /**
+     * Run every tenant once: definitions, snapshot statuses, the existing balance-sheet report for
+     * each usable month (missing/stale months are not queried for amounts), and fiscal-year-to-date
+     * profit/loss from posted journals via the existing profit/loss range report.
+     */
+    protected function balanceSheetSources(array $months, array $tenantIds): array
+    {
+        return $this->tenants->run($tenantIds, function () use ($months) {
+            $statuses = $this->balanceSheetSnapshotStatuses($months);
+
+            return [
+                'definitions' => $this->definitions(),
+                'months' => array_map(fn (array $month, string $status) => [
+                    'status' => $status,
+                    'payload' => $status === 'current' ? $this->reports->balanceSheet($month['year'], $month['month']) : null,
+                    'profit_loss' => $this->reports->profitLossRange($month['current_year_period'])['report'],
+                ], $months, $statuses),
+            ];
+        });
+    }
+
+    /**
+     * Classify each month's snapshot in the active transaction database:
+     * - current: the month is closed and every month from the earliest posted journal
+     *   through it is closed in chronological closed_at order (carry-forward intact),
+     *   with no legacy-signed snapshot in that chain;
+     * - stale: snapshots exist for an open (reopened) month, or a closed month's carry-forward
+     *   chain has an open month, an earlier month closed after it, or a legacy-signed snapshot;
+     * - missing: the month is not closed and has no snapshots.
+     */
+    protected function balanceSheetSnapshotStatuses(array $months): array
+    {
+        $indexOf = fn ($year, $month) => (int) $year * 12 + (int) $month - 1;
+        $periods = FiscalPeriod::query()->get()->keyBy(fn (FiscalPeriod $period) => $indexOf($period->year, $period->month));
+        $snapshots = MonthlyBalance::query()
+            ->selectRaw('fiscal_year, fiscal_month, COUNT(*) as snapshot_count')
+            ->groupBy('fiscal_year', 'fiscal_month')->get()
+            ->mapWithKeys(fn ($row) => [$indexOf($row->fiscal_year, $row->fiscal_month) => (int) $row->snapshot_count]);
+        $legacy = $this->legacySignedSnapshotMonths()
+            ->mapWithKeys(fn ($row) => [$indexOf($row->fiscal_year, $row->fiscal_month) => true]);
+        $earliest = JournalEntry::query()->where('status', JournalStatus::POSTED->value)->min('trx_date');
+        $earliest = $earliest === null ? null : $indexOf(Carbon::parse($earliest)->year, Carbon::parse($earliest)->month);
+
+        return array_map(function (array $month) use ($indexOf, $periods, $snapshots, $legacy, $earliest) {
+            $target = $indexOf($month['year'], $month['month']);
+            $period = $periods->get($target);
+            if (! $period || ! $period->is_closed) {
+                return ($snapshots->get($target, 0) > 0) ? 'stale' : 'missing';
+            }
+            $previousClosedAt = null;
+            for ($index = $earliest === null ? $target : min($earliest, $target); $index <= $target; $index++) {
+                $link = $periods->get($index);
+                if (! $link || ! $link->is_closed || $legacy->has($index)
+                    || ($previousClosedAt && $link->closed_at && $link->closed_at->lt($previousClosedAt))) {
+                    return 'stale';
+                }
+                $previousClosedAt = $link->closed_at ?? $previousClosedAt;
+            }
+
+            return 'current';
+        }, $months);
+    }
+
+    /**
+     * Months whose ASSET/EXPENSE snapshot rows were written credit-normal by closeMonth() before
+     * its case-insensitive type fix: ending = opening + credit - debit with non-zero net activity.
+     * Rows seeded without activity totals never match. Uses the same account/category sources as
+     * closing; account ids are chunked because accounts may live on a separate master connection.
+     */
+    protected function legacySignedSnapshotMonths(): Collection
+    {
+        $types = $this->categories->allOrdered()->pluck('type', 'id');
+        $debitNormal = Account::query()->get(['id', 'category_id'])
+            ->filter(fn (Account $account) => in_array(strtoupper((string) $types->get($account->category_id)), ['ASSET', 'EXPENSE'], true))
+            ->modelKeys();
+
+        return collect($debitNormal)->chunk(500)->flatMap(fn (Collection $ids) => MonthlyBalance::query()
+            ->whereIn('account_id', $ids->values()->all())
+            ->whereRaw('ABS(total_debit - total_credit) >= 0.005')
+            ->whereRaw('ABS(ending_balance - (opening_balance + total_credit - total_debit)) < 0.005')
+            ->distinct()->get(['fiscal_year', 'fiscal_month'])
+            ->all());
+    }
+
+    protected function consolidatedBalanceSheetSummary(array $sources, int $position, array $mappings): array
+    {
+        $snapshots = array_map(fn (array $source) => [
+            'tenant_id' => $source['tenant_id'],
+            'status' => $source['report']['months'][$position]['status'],
+        ], $sources);
+        $statuses = array_column($snapshots, 'status');
+        $status = in_array('missing', $statuses, true) ? 'missing' : (in_array('stale', $statuses, true) ? 'stale' : 'current');
+        $merge = fn (string $key, array $groups) => $this->mergeSources(array_map(fn (array $source) => [
+            'tenant_id' => $source['tenant_id'],
+            'report' => [
+                'payload' => $source['report']['months'][$position][$key],
+                'definitions' => $source['report']['definitions'],
+            ],
+        ], $sources), $groups);
+        $profitLoss = $merge('profit_loss', ['revenue' => 'REVENUE', 'expense' => 'EXPENSE']);
+        $balanceSheet = $status === 'current'
+            ? $merge('payload', ['asset' => 'ASSET', 'liability' => 'LIABILITY', 'equity' => 'EQUITY'])
+            : null;
+
+        return ['status' => $status]
+            + $this->balanceSheetMetrics(
+                $balanceSheet,
+                $this->sumRoots($profitLoss['revenue']) - $this->sumRoots($profitLoss['expense']),
+                $mappings
+            )
+            + ['snapshots' => $snapshots];
+    }
+
+    /**
+     * Dashboard metrics from one balance-sheet tree (a tenant payload or a consolidated merge).
+     * Snapshot-derived values are null when $data is null. Current-year profit/loss comes from
+     * posted journals and is added to liabilities + equity exactly once: equity totals contain
+     * only EQUITY categories, and journals that close profit into equity also post to the
+     * revenue/expense accounts, reducing the journal-based profit by the transferred amount.
+     */
+    protected function balanceSheetMetrics(?array $data, float $currentYearProfitLoss, array $mappings): array
+    {
+        $profitLoss = round($currentYearProfitLoss, 2);
+        if ($data === null) {
+            return array_fill_keys([
+                'total_assets', 'total_liabilities', 'total_equity',
+                'current_assets', 'current_liabilities', 'current_ratio', 'debt_ratio',
+            ], null) + ['current_year_profit_loss' => $profitLoss, 'balance_sheet_difference' => null];
+        }
+
+        $assets = $this->sumRoots($data['asset']);
+        $liabilities = $this->sumRoots($data['liability']);
+        $equity = $this->sumRoots($data['equity']);
+        $currentAssets = $this->currentBalance($data['asset'], $mappings);
+        $currentLiabilities = $this->currentBalance($data['liability'], $mappings);
+
+        return [
+            'total_assets' => $assets,
+            'total_liabilities' => $liabilities,
+            'total_equity' => $equity,
+            'current_assets' => $currentAssets,
+            'current_liabilities' => $currentLiabilities,
+            'current_ratio' => $currentLiabilities == 0.0 ? null : round($currentAssets / $currentLiabilities, 2),
+            'debt_ratio' => $assets == 0.0 ? null : round($liabilities / $assets * 100, 2),
+            'current_year_profit_loss' => $profitLoss,
+            'balance_sheet_difference' => round($assets - ($liabilities + $equity + $profitLoss), 2),
+        ];
+    }
+
+    /** Sum account balances classified current (account mapping, else nearest mapped ancestor category). */
+    protected function currentBalance(array $nodes, array $mappings): float
+    {
+        $total = 0.0;
+        $walk = function (array $node, ?string $inherited) use (&$walk, &$total, $mappings): void {
+            $classification = $mappings['category_mappings'][$this->code($node['category_code'] ?? null, 'category')] ?? $inherited;
+            foreach ($node['accounts'] as $account) {
+                $code = $this->code($account['code'] ?? null, 'account');
+                if (($mappings['account_mappings'][$code] ?? $classification) === 'current') {
+                    $total += (float) $account['balance'];
+                }
+            }
+            foreach ($node['children'] as $child) {
+                $walk($child, $classification);
+            }
+        };
+        foreach ($nodes as $node) {
+            $walk($node, null);
+        }
+
+        return round($total, 2);
     }
 
     protected function tenantSummaryTotals(array $result): array

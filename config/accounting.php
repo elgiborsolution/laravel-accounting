@@ -68,6 +68,27 @@ return [
         ],
     ],
 
+    // Journals treated as profit transfers (e.g. revenue/expense -> income summary -> retained
+    // earnings) and excluded from balance-sheet profit details, alongside opening-balance journals.
+    // closing_service_codes match the journal's service (journalByMapping); closing_source_types
+    // match journals.source_type (e.g. journalManual(['source_type' => 'MONTH_END_CLOSING', ...])).
+    // Reversals copy both markers. Use [] to disable either list.
+    'profit_loss_detail' => [
+        'closing_service_codes' => ['MONTH_END_CLOSING', 'YEAR_END_CLOSING'],
+        'closing_source_types' => ['MONTH_END_CLOSING', 'YEAR_END_CLOSING'],
+    ],
+
+    // Balance-sheet dashboard classification: stable code => 'current' | 'non_current' for
+    // ASSET/LIABILITY accounts (current ratio). Account overrides win over the nearest mapped
+    // ancestor category; unmapped accounts are non-current. Merged over these defaults.
+    'balance_sheet_summary' => [
+        'account_mappings' => [],
+        'category_mappings' => [
+            'CURRENT_ASSET' => 'current',
+            'CURRENT_LIABILITY' => 'current',
+        ],
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Fiscal Settings
@@ -77,7 +98,8 @@ return [
     |
     */
     'fiscal' => [
-        'start_month' => 1, // January
+        // 1-12, January by default. Balance-sheet summaries use it for current-year profit/loss.
+        'start_month' => 1,
     ],
 
     // Operational cutoff dates live in the database, never in environment config.
