@@ -25,7 +25,6 @@ _Last updated: 2026-11-05_
 - Refactor: Refactor code structure and remove redundant code blocks for improved readability and maintainability [config/accounting.php]
 
 ## Notes
-- chore: Remove stock opname gain and loss services and related mappings from inventory catalog
 - feat: Enhance account detail response with category hierarchy and representations
 - Add feature tests for consolidated and tenant financial reports
 - feat: Implement ProfitLossSummaryService and ProfitLossSummaryCalculator for financial reporting
@@ -35,6 +34,7 @@ _Last updated: 2026-11-05_
 - feat: add getAccountBreakdown method for tenant-specific account activity analysis and implement related tests
 - feat: add tenant-specific profit/loss summary methods and related tests for financial reporting
 - gotcha: pwsh is unavailable in this Windows environment; context-mode shell already runs PowerShell, so use native commands directly.
+- New feature: Add comprehensive tests for BalanceSheetSummaryServices [config/accounting.php]
 
 ## Key files
 - `database/factories/AccountFactory.php`
