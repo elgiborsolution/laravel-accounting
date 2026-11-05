@@ -208,6 +208,10 @@ class AccountingServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__.'/../database/migrations/accounting/' => database_path('migrations/accounting'),
             ], 'accounting-migrations');
+
+            $this->publishes([
+                __DIR__.'/../database/migrations/accounting-central/' => database_path('migrations/accounting-central'),
+            ], 'accounting-central-migrations');
         }
     }
 

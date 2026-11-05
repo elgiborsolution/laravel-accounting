@@ -2,8 +2,8 @@
 
 namespace ESolution\LaravelAccounting\Services;
 
+use ESolution\LaravelAccounting\Exceptions\AccountingPeriodLockedException;
 use ESolution\LaravelAccounting\Models\Account;
-use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\JournalEntryDetail;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
@@ -270,17 +270,14 @@ class AccountOpeningBalanceService
         string $accountLineType,
         string $contraLineType
     ): void {
-        $date = Carbon::parse($trxDate);
-        app(FiscalPeriodService::class)->ensureForJournalDate($date);
-
-        $period = FiscalPeriod::query()
-            ->where('year', $date->year)
-            ->where('month', $date->month)
-            ->first();
-
-        if ($period && $period->is_closed) {
+        try {
+            $periods = app(FiscalPeriodService::class);
+            $periods->assertDateOpen($journal->trx_date);
+            $periods->assertDateOpen($trxDate);
+        } catch (AccountingPeriodLockedException $e) {
             throw ValidationException::withMessages([
-                'trx_date' => ['The selected fiscal period is closed.'],
+                'trx_date' => [config('accounting.closing.cutoff_enabled', false)
+                    ? $e->getMessage() : 'The selected fiscal period is closed.'],
             ]);
         }
 
@@ -337,6 +334,11 @@ class AccountOpeningBalanceService
 
     protected function runAtomic(callable $callback)
     {
+        return app(FiscalPeriodService::class)->withClosingLock(fn () => $this->runAccountTransactions($callback));
+    }
+
+    protected function runAccountTransactions(callable $callback)
+    {
         $connections = collect([
             (new Account)->getConnectionName(),
             $this->connections->resolveTransactionDataConnection(),
@@ -344,11 +346,13 @@ class AccountOpeningBalanceService
             ->unique()
             ->values();
 
-        foreach ($connections as $connection) {
-            DB::connection($connection)->beginTransaction();
-        }
-
+        $levels = [];
         try {
+            foreach ($connections as $connection) {
+                $levels[$connection] = DB::connection($connection)->transactionLevel();
+                DB::connection($connection)->beginTransaction();
+            }
+
             $result = $callback();
 
             foreach ($connections as $connection) {
@@ -357,11 +361,11 @@ class AccountOpeningBalanceService
 
             return $result;
         } catch (Throwable $e) {
-            foreach ($connections->reverse() as $connection) {
+            foreach (array_reverse(array_keys($levels)) as $connection) {
                 $db = DB::connection($connection);
 
-                while ($db->transactionLevel() > 0) {
-                    $db->rollBack();
+                if ($db->transactionLevel() > $levels[$connection]) {
+                    $db->rollBack($levels[$connection]);
                 }
             }
 

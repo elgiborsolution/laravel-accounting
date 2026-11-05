@@ -1,0 +1,52 @@
+<?php
+
+use ESolution\LaravelAccounting\Services\FiscalPeriodService;
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        $connection = $this->centralConnection();
+        $prefix = config('accounting.table_prefix', 'acc_');
+        Schema::connection($connection)->create($prefix.'shared_closing_cutoffs', function (Blueprint $table) {
+            $table->unsignedTinyInteger('id')->primary();
+            $table->date('cutoff_date')->nullable();
+            $table->json('tenant_ids')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+        DB::connection($connection)->table($prefix.'shared_closing_cutoffs')->insert(['id' => 1]);
+        Schema::connection($connection)->create($prefix.'shared_closing_cutoff_events', function (Blueprint $table) {
+            $table->bigIncrements('id');
+            $table->string('action', 20);
+            $table->date('previous_cutoff_date')->nullable();
+            $table->date('cutoff_date')->nullable();
+            $table->json('tenant_ids');
+            $table->string('actor_id', 100)->nullable();
+            $table->text('reason')->nullable();
+            $table->timestamp('created_at');
+        });
+    }
+
+    public function down(): void
+    {
+        $connection = $this->centralConnection();
+        $prefix = config('accounting.table_prefix', 'acc_');
+        Schema::connection($connection)->dropIfExists($prefix.'shared_closing_cutoff_events');
+        Schema::connection($connection)->dropIfExists($prefix.'shared_closing_cutoffs');
+    }
+
+    /** The configured master connection (accounting.master_data.connection), resolved by FiscalPeriodService. */
+    private function centralConnection(): string
+    {
+        $periods = app(FiscalPeriodService::class);
+        if ($periods->cutoffMode() !== 'shared') {
+            throw new RuntimeException('Select shared cutoff mode before migrating the central cutoff tables.');
+        }
+
+        return $periods->cutoffConnection();
+    }
+};

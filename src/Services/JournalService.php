@@ -41,6 +41,11 @@ class JournalService
      */
     public function journalByMapping(array $data)
     {
+        return app(FiscalPeriodService::class)->withClosingLock(fn () => $this->journalByMappingInternal($data));
+    }
+
+    protected function journalByMappingInternal(array $data)
+    {
         $this->logConnectionSnapshot('journalByMapping:start');
 
         return DB::connection($this->transactionConnection())->transaction(function () use ($data) {
@@ -155,11 +160,17 @@ class JournalService
      */
     public function journalManual(array $data, bool $wrapTransaction = true)
     {
+        return app(FiscalPeriodService::class)->withClosingLock(fn () => $this->runManualJournal($data, $wrapTransaction));
+    }
+
+    protected function runManualJournal(array $data, bool $wrapTransaction)
+    {
         $callback = function () use ($data) {
             return $this->journalManualInternal($data);
         };
 
-        if (! $wrapTransaction) {
+        if (! $wrapTransaction && (! config('accounting.closing.cutoff_enabled', false)
+            || DB::connection($this->transactionConnection())->transactionLevel() > 0)) {
             return $callback();
         }
 
@@ -170,6 +181,11 @@ class JournalService
      * Create an opening balance journal entry.
      */
     public function journalOpeningBalance(array $data)
+    {
+        return app(FiscalPeriodService::class)->withClosingLock(fn () => $this->openingJournal($data));
+    }
+
+    protected function openingJournal(array $data)
     {
         $this->logConnectionSnapshot('journalOpeningBalance:start');
 
@@ -342,7 +358,14 @@ class JournalService
      */
     public function reverse($journalId, string $reason, int|string|null $postedBy = null)
     {
+        return app(FiscalPeriodService::class)->withClosingLock(fn () => $this->reverseJournal($journalId, $reason, $postedBy));
+    }
+
+    protected function reverseJournal($journalId, string $reason, int|string|null $postedBy)
+    {
         return DB::connection($this->transactionConnection())->transaction(function () use ($journalId, $reason, $postedBy) {
+            $trxDate = now();
+            $this->checkPeriodLocked($trxDate);
             $journal = $this->journals->findWithDetails($journalId);
 
             if (! $journal) {
@@ -350,8 +373,6 @@ class JournalService
             }
 
             $this->validateReversal($journal);
-
-            $trxDate = now();
 
             $reversalDetails = $journal->getRelation('details')->map(function ($detail) {
                 return [
@@ -393,6 +414,22 @@ class JournalService
      * Post a journal entry.
      */
     public function post($id, int|string|null $postedBy = null)
+    {
+        return app(FiscalPeriodService::class)->withClosingLock(fn () => $this->postWithCutoff($id, $postedBy));
+    }
+
+    protected function postWithCutoff($id, int|string|null $postedBy)
+    {
+        if (! config('accounting.closing.cutoff_enabled', false)) {
+            return $this->postJournal($id, $postedBy);
+        }
+
+        return DB::connection($this->transactionConnection())->transaction(function () use ($id, $postedBy) {
+            return $this->postJournal($id, $postedBy);
+        });
+    }
+
+    protected function postJournal($id, int|string|null $postedBy)
     {
         $journal = JournalEntry::findOrFail($id);
 
@@ -438,17 +475,7 @@ class JournalService
 
     protected function checkPeriodLocked($date)
     {
-        $date = Carbon::parse($date);
-
-        app(FiscalPeriodService::class)->ensureForJournalDate($date);
-
-        $period = FiscalPeriod::where('year', $date->year)
-            ->where('month', $date->month)
-            ->first();
-
-        if ($period && $period->is_closed) {
-            throw new AccountingPeriodLockedException;
-        }
+        app(FiscalPeriodService::class)->assertDateOpen($date);
     }
 
     protected function validateReversal(JournalEntry $journal): void
@@ -463,7 +490,9 @@ class JournalService
             throw new Exception('This journal has already been reversed');
         }
 
-        $this->checkPeriodLocked($journal->trx_date);
+        // Reversal appends a new entry; its cutoff check uses the new date.
+        // Preserve the original journal's existing monthly/year lock rules.
+        app(FiscalPeriodService::class)->assertDateOpen($journal->trx_date, false);
 
         if ($this->isFiscalYearClosed($journal->trx_date)) {
             throw new Exception('This journal belongs to a closed fiscal year and cannot be reversed');

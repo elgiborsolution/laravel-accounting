@@ -216,6 +216,8 @@ Behavior notes:
 - All journal creation paths accept optional `posted_by` as either integer or string and store it directly without checking any users table.
 - `reverse()` creates a brand-new reversal journal and does not edit the original posted journal.
 - `post()` is idempotent for already-posted journals.
+- Journal writes share `FiscalPeriodService::assertDateOpen()`. With cutoff protection enabled, dates on or before the saved cutoff are locked, even when their fiscal month is open. Reversals check their actual new `trx_date` (`now()`) and retain the original journal's monthly/year lock rules. A reversal dated after a cutoff can correct an original dated before it when that original's month/year is otherwise open.
+- Enabled cutoff checks hold the transaction database's cutoff-row lock through the write. Posting uses a transaction in cutoff mode; `journalManual(..., false)` starts one when its caller has no transaction. Existing caller transactions are reused.
 
 Input notes:
 
@@ -288,32 +290,169 @@ Dependency: `AccountCategoryTreeService`.
 
 File: [`src/Services/FiscalPeriodService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/FiscalPeriodService.php)
 
-Purpose: ensures fiscal-period records exist for journal and closing workflows.
+Purpose: ensures fiscal-period records exist and applies shared monthly/cutoff date checks for journal workflows.
 
-Dependency: `FiscalPeriodRepository`.
+Dependencies: `FiscalPeriodRepository`; cutoff checks resolve `AccountingConnectionResolver` and `AccountingTableResolver` from the container. The constructor is unchanged.
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
 | `ensureForDate($date)` | Parseable date required | `FiscalPeriod` | Creates or returns the period for the date. |
 | `ensureThroughCurrentMonth(?Carbon $fromDate = null)` | Optional starting Carbon date | `Collection<FiscalPeriod>` | Ensures periods from the supplied date, earliest journal date, or current month through the current month. |
 | `ensureForJournalDate($date)` | Parseable date required | `FiscalPeriod` | Alias for `ensureForDate()`. |
+| `assertDateOpen($date, bool $includeCutoff = true): void` | Actual affected date required; cutoff inclusion defaults to true | `void` | Checks the saved inclusive cutoff, ensures the fiscal period, and rejects closed months with `AccountingPeriodLockedException` (423). Passing false retains only monthly checks for an unchanged reversal original; the new reversal date receives the full check. |
+| `lockClosingCutoff(): ?object` | None | `object\|null` | Reads and locks the local or central singleton according to mode; null when disabled. Missing enabled state fails explicitly. |
+| `cutoffMode(): string` | None | `string` | Returns `per_tenant` or `shared`; rejects unknown modes. |
+| `cutoffConnection(): string` | None | `string` | Resolves the transaction connection in per-tenant mode, or the configured master connection (`accounting.master_data.connection`) in shared mode, whether or not `use_shared_database` is enabled. Throws `RuntimeException` when that connection is unset or not defined. |
+| `withClosingLock(callable $callback): mixed` | Callback required | Callback result | In enabled shared mode, holds the central lock until the callback and its tenant commits complete. Otherwise executes the callback directly. |
 
 ### `ClosingService`
 
 File: [`src/Services/ClosingService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ClosingService.php)
 
-Purpose: closes/reopens fiscal months and materializes account `MonthlyBalance` rows.
+Purpose: closes/reopens fiscal months and materializes account `MonthlyBalance` rows, or manages an audited inclusive date cutoff.
 
-Dependencies: `AccountCategoryRepository`, `AccountingTableResolver`, `FiscalPeriodService`, transaction connection, cache, database transactions.
+Dependencies: `AccountCategoryRepository`, `AccountingTableResolver`, `FiscalPeriodService`, `AccountingConnectionResolver`, `TenantReportRunner`, transaction connections, cache, database transactions. Constructor dependencies remain unchanged.
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
-| `closeMonth($year, $month, $userId = null)` | Year/month required; closer ID optional | `FiscalPeriod` | Ensures the period, upserts monthly balances, and marks it closed. |
-| `closeThroughCurrentMonth($userId = null)` | Optional closer ID | `Collection<FiscalPeriod>` | Closes every currently open period through the current month. |
-| `closeUntilCurrentMonth($userId = null)` | Optional closer ID | `Collection<FiscalPeriod>` | Alias of `closeThroughCurrentMonth()`. |
+| `closeMonth($year, $month, $userId = null)` | Year/month required; closer ID optional | `FiscalPeriod` | Ensures the selected calendar period, upserts its monthly balances, and marks it closed. Optional `closing_day` (1–31 or `month_end`) rejects execution before that day in the selected or following month, per `closing_day_month`. |
+| `closeThroughCurrentMonth($userId = null, ?string $cutoffDate = null)` | Optional closer ID and `Y-m-d` cutoff | `Collection<FiscalPeriod>\|array` | Explicit dates delegate to `closeThroughDate()`. Without a date, closes due months; null `closing_day` retains closing through the current month. Enabled shared mode publishes the applicable month-end cutoff for the saved scope. It takes no tenant argument, so the first shared close must use `closeThroughDate(..., $tenantIds)`. |
+| `closeUntilCurrentMonth($userId = null, ?string $cutoffDate = null)` | Optional closer ID and cutoff | `Collection<FiscalPeriod>\|array` | Alias of `closeThroughCurrentMonth()`. |
 | `reopenMonth($year, $month, $userId = null)` | Year/month required; user ID currently unused | `FiscalPeriod` | Reopens one closed period. |
+| `closeThroughDate(string $cutoffDate, int\|string\|null $userId = null, ?string $reason = null, ?array $tenantIds = null): array` | Required `Y-m-d` cutoff; optional actor/reason and tenant scope | `array` | Per-tenant mode advances independent date locks. Shared mode closes complete months in every selected tenant, then atomically publishes one cutoff and audit event centrally. |
+| `reopenCutoff(?string $cutoffDate, string $reason, int\|string\|null $userId = null, ?array $tenantIds = null): array` | Earlier retained cutoff, or null; nonblank reason required; actor/scope optional | `array` | Reopens local cutoffs independently or one shared cutoff. Shared reopening validates monthly locks in every participant before changing central state. |
+| `getCutoffDate(): ?string` | None | `string\|null` | Reads the saved local or authoritative shared cutoff; null means no active cutoff or disabled protection. |
+| `getCutoffHistory(): Collection` | None; cutoff feature must be enabled | `Collection<object>` | Returns audit events in increasing event-ID order, including prior dates, new dates, actor, reason, action and timestamp. |
 
 Rules: closing rejects already-closed periods and unbalanced posted journals; ending balances use category normal balance and the prior month's ending balance. Reopening is blocked while subsequent periods are still closed. Queries use the resolved transaction connection and resolved tables.
+
+Cutoff configuration and persistence:
+
+```php
+// Host application's published config/accounting.php
+'closing' => [
+    'closing_day' => env('ACCOUNTING_CLOSING_DAY'), // null, 1–31, or month_end.
+    'closing_day_month' => env('ACCOUNTING_CLOSING_DAY_MONTH', 'next'), // current or next.
+    'cutoff_enabled' => env('ACCOUNTING_CLOSING_CUTOFF_ENABLED', false),
+    'cutoff_mode' => env('ACCOUNTING_CLOSING_CUTOFF_MODE', 'per_tenant'), // shared stores on master_data.connection.
+],
+```
+
+Shared cutoffs do not have their own connection or tenant-list settings. Earlier `closing.shared_connection` / `ACCOUNTING_CLOSING_SHARED_CONNECTION` and `closing.tenant_ids` values are ignored. Move the connection name to `ACCOUNTING_MASTER_CONNECTION` and pass the tenant list to the first shared close.
+
+Monthly closing day:
+
+`closing_day` and `closing_day_month` together set the earliest execution moment (midnight, application timezone) for closing a selected month:
+
+| `closing_day` | `closing_day_month` | `closeMonth(2026, 11)` eligible from |
+| --- | --- | --- |
+| null / empty (default) | any | Always; prior unrestricted timing |
+| `2` | `next` (default) | 2026-12-02 00:00 |
+| `month_end` | `current` | 2026-11-30 00:00 |
+| `15` | `current` | 2026-11-15 00:00 |
+| `month_end` | `next` | 2026-12-31 00:00 |
+| `31` | `current` (for `closeMonth(2028, 2)`) | 2028-02-29 00:00 (clamped) |
+
+- `closing_day` accepts null/empty, an integer 1–31 (environment strings such as `"5"` are accepted), or the exact lowercase string `month_end`, meaning the last day of the target month. `closing_day_month` accepts exactly `current` (the month being closed) or `next` (the month after it). Null/empty `closing_day_month` means `next`, so existing numeric settings keep their prior meaning. Numeric days past the end of the target month clamp to its last day. Any other value (for example `0`, `32`, `end`, `Month_End`, `previous`, `selected`, `Current`) fails with a `ValidationException` before any fiscal period, snapshot or cutoff changes. With a null `closing_day`, the month setting is ignored and is not validated.
+- `current` lets the selected month close on or before its own last day. Closing snapshots posted activity as it stands at execution and month-locks every remaining date of that month. With `month_end`, a close at November 30 00:00 includes only November 30 entries already posted; afterwards November 30 is locked. Choose `next` when entries for the final day may arrive after midnight.
+- The same eligibility applies to `closeMonth()`, `closeThroughCurrentMonth()`/`closeUntilCurrentMonth()` (whose latest month can be the current month under `current`), and shared `closeThroughDate()` preflight.
+- `closing_day` controls the earliest execution date, not the transaction selection boundary. Null or an empty environment value preserves the previous unrestricted timing. Set `ACCOUNTING_CLOSING_DAY=5` to make November 2026 eligible at December 5, 2026, 00:00 in the application's timezone. Later execution is allowed for missed runs and catch-up. Invalid configured days fail validation. When enabled, selected year/month inputs must also be valid integers (year 1–9999, month 1–12).
+- Interpreting day 5 as a partial November boundary would omit November 6–30 from a complete monthly snapshot. Extending November through December 5 would overlap December and count those movements twice. The implemented following-month interpretation avoids both: `closeMonth(2026, 11)` always selects posted journals with November `trx_date`, including November 30, and excludes every December transaction. Posting/execution timestamps do not change the accounting month. No journal date is rewritten and no closing journal is generated.
+- Fiscal boundaries remain November 1–30. Snapshots remain keyed by November; `closed_at` records the actual execution timestamp. Existing opening-balance, movement, category-sign and carry-forward calculations are unchanged. Close earlier months first when their ending balances are needed. This setting does not repair historical gaps or recalculate later snapshots.
+- Days 29–31 clamp to the final day of a shorter following month. For example, day 31 makes January 2028 eligible on February 29, 2028. December closes in January of the following year. No scheduler or command is installed: the host calls the existing service, optionally from its scheduler.
+- `closeThroughCurrentMonth()` and its alias skip months not yet eligible. Before December 5 with day 5, October is the latest eligible month; on December 5, November becomes eligible. The active-database result remains a collection. Enabled shared mode uses that latest eligible month end as its default target, retaining its audit-event response. Explicit shared targets preflight every pending complete month in every tenant before creating any snapshots. A target requiring an early monthly close fails without publishing a cutoff. Existing forward-only cutoff rules still apply if a saved explicit cutoff is already ahead of the default target.
+- `closeMonth()` does not advance a local or shared cutoff. In per-tenant mode, `closeThroughDate()` remains a date-lock operation independent of `closing_day`; in shared mode it also completes months and therefore checks their eligibility. Never pass the execution date merely to schedule closing: a December 5 cutoff would also lock December 1–5. Use November 30 when the intended transaction lock ends with November.
+- Existing retries and reopening remain unchanged: direct `closeMonth()` rejects an already-closed month; bulk closing skips closed months; completed shared retries reuse their audit event. Reopening retains snapshots, respects later closed months, and does not move cutoff state. Reclosing still uses the selected month and the current eligibility setting, replacing its existing snapshots. A host scheduled job can reclose reopened months; pause or coordinate that job during corrections. Rebuild affected snapshots in chronological order after reopening.
+- The setting also applies when cutoff protection is disabled. It changes only monthly eligibility; enabling it does not turn on date cutoffs or alter journal locks. Configuration remains publishable through `accounting-config` and compatible with `php artisan config:cache`; rebuild the host config cache after edits.
+
+```php
+// ACCOUNTING_CLOSING_DAY=5; execute on December 5, 2026 or later.
+$closing = app(\ESolution\LaravelAccounting\Services\ClosingService::class);
+$period = $closing->closeMonth(2026, 11, $userId); // November only; December stays open.
+// Use the existing coordinated workflow when a shared cutoff must also advance:
+$event = $closing->closeThroughDate('2026-11-30', $userId, 'November reviewed', $tenantIds);
+```
+
+```php
+// ACCOUNTING_CLOSING_DAY=month_end, ACCOUNTING_CLOSING_DAY_MONTH=current
+// On 2026-11-29: closeMonth(2026, 11) throws ValidationException (closing_day).
+// From 2026-11-30 00:00:
+$period = $closing->closeMonth(2026, 11, $userId);      // All posted November entries; November 30 is now locked.
+$closed = $closing->closeThroughCurrentMonth($userId);   // Includes the current month once its last day arrives.
+
+// ACCOUNTING_CLOSING_DAY=2, ACCOUNTING_CLOSING_DAY_MONTH=next (same as leaving the month setting unset)
+// closeMonth(2026, 11) becomes eligible on 2026-12-02 00:00.
+```
+
+Cutoff storage setup:
+
+- For `per_tenant`, run `2026_11_04_000016_create_acc_closing_cutoffs_tables.php` in every participating transaction database. The `accounting-migrations` tag includes these prefixed local state/audit tables. Journal entries, fiscal periods and monthly balances retain their existing transaction-database ownership in both modes. Master data continues to use its existing resolver.
+- For `shared`, set `ACCOUNTING_MASTER_CONNECTION` to a named Laravel connection defined in `database.connections`, and select `ACCOUNTING_CLOSING_CUTOFF_MODE=shared`. Publish `accounting-central-migrations`, then run `php artisan migrate --database=<master-connection> --path=database/migrations/accounting-central` once centrally. This separate directory is not auto-loaded with tenant migrations. Its migration requires shared mode and explicitly uses the master connection. It creates prefixed `shared_closing_cutoffs` and `shared_closing_cutoff_events`; both contain canonical `tenant_ids` JSON. The connection must remain stable during tenancy switching and must be separate from each tenant transaction connection. Do not configure another connection name pointing to the same tenant database.
+
+Shared cutoff storage by master-data setting:
+
+| `ACCOUNTING_USE_SHARED_DATABASE` | `ACCOUNTING_MASTER_CONNECTION` | Shared cutoffs |
+| --- | --- | --- |
+| `true` | Named central connection | Supported. Master data and shared cutoff tables share the central connection. |
+| `false` | Named central connection | Supported. Master data stays on each tenant connection (the flag still controls it); only the shared cutoff tables use the master connection. |
+| any | Unset/empty, or not defined in `database.connections` | Unsupported. Shared operations, journal writes with cutoffs enabled, and the central migration throw `RuntimeException`. |
+| any | Same as a participating tenant's transaction connection (including single-database installs) | Unsupported. Shared close/reopen throws `RuntimeException` before any change. Use `per_tenant` instead. |
+- The state table contains one seeded row (`id = 1`) with nullable `cutoff_date` and `updated_at`. The event table has an increasing ID, `action` (`close`, `advance`, `reopen`), nullable `previous_cutoff_date`/`cutoff_date`, nullable string `actor_id` (maximum 100 characters), nullable reason (maximum 1000 characters), and `created_at`. Service methods append audit events; changing state and appending its event occur in one transaction.
+- Then enable `ACCOUNTING_CLOSING_CUTOFF_ENABLED=true`. Leave it enabled while using saved cutoffs; reopen through the audited service method. Default false preserves existing installations and manual test schemas without cutoff tables. Missing tables/state fail explicitly when enabled. The existing `accounting-config` publish tag exposes these editable values; they are compatible with `php artisan config:cache`. Rebuild the host config cache after edits.
+- There is no environment cutoff date. Remove the old `ACCOUNTING_CLOSING_CUTOFF_DATE` / `closing.cutoff_date` setting from published configuration. Dates advance only through closing operations; changing configuration never advances an operational date. Migration between existing per-tenant and shared policies is not automatic: reconcile existing closures before switching modes. Never use a mode change to bypass a saved lock.
+
+Tenant scope and coordination:
+
+- `per_tenant` is the default. Omitted `tenantIds` uses the active transaction database. Explicit IDs use the existing runner's complete-list validation, primary/route-key resolution and deduplication. Each tenant commits its own state and audit independently. The result is `[{tenant_id, report: <audit event>}]`. If a later tenant fails, earlier independent operations remain committed; inspect their histories before retrying those local operations. Local same-date closing remains an error.
+- `shared` takes its scope from the explicit `tenantIds` argument, otherwise from the saved central scope. Before any scope is saved, omitting `tenantIds` (including through `closeThroughCurrentMonth()`) fails with a `tenant_ids` validation error. A saved scope must match any explicit list. The first successful publication fixes canonical membership. Subsets, additional tenants, missing tenants and empty lists fail explicitly; there is no fallback database or implicit scope change. Supply the full scope for reopening too. Journal writes require an active participating tenant once the shared scope is saved, including after clearing its date.
+- Shared closing validates posted debit/credit equality through the target in every tenant. It then closes complete calendar months from the earliest journal/existing fiscal period through the target, skipping closed months. A November 15 cutoff closes October and earlier complete months; November remains open without a partial snapshot. A November 30 cutoff can close November completely. Existing monthly calculations and account metadata resolution are reused; local UUIDs never cross databases. Use an actor ID compatible with each database's existing monthly `closed_by` column.
+- A central row lock serializes shared closings, reopening, monthly lock changes and journal writes. Every local close commits before central publication. If initialization, validation, a tenant close or central audit fails, the previous shared cutoff and history remain unchanged. Completed local months remain closed: this is coordinated publication, not a distributed rollback. Retrying revalidates all tenants and skips closed months. Retrying the currently completed close/reopen target returns its existing event without duplicate audit. A different later target is a new operation.
+- Tenant execution restores the original active tenant and default connection through the runner's nested `finally`, including initialization/query failures. All participating processes must use the same master connection, mode and table prefix. No cutoff cache exists. Connection failure or missing state fails closed.
+
+Cutoff behavior:
+
+- A saved `2026-11-15` cutoff rejects creation/posting dated November 15 or earlier, including backdated drafts and opening balances; November 16 onward remains writable unless a monthly lock applies. Inputs are calendar dates in `Y-m-d` format. Full datetime journal inputs are checked using their calendar date, inclusively.
+- Per-tenant date closing only saves a lock; it does not automatically close fiscal months or generate snapshots. Shared date closing also completes full months as described above. Neither mode stores partial totals as complete snapshots. Explicit `closeMonth()` retains full-month behavior and does not publish or advance the cutoff by itself.
+- Manual, mapped, package opening-balance, per-account opening-balance, posting and reversal paths use the same cutoff check. Editing an account opening journal checks both its original and target dates, including amount-only edits; moving a locked opening into an open date cannot bypass protection. Rejections roll back master/transaction changes through the existing service transaction handling.
+- Advancing cannot move backward. Except for a completed shared retry, the date must advance strictly. Reopening requires an active cutoff, an earlier date (or null), and a reason. For example, reopening from November 20 to November 15 keeps dates through November 15 locked and opens November 16 onward. Clearing is allowed only when no closed monthly periods remain; otherwise reopen those months first. Shared reopening checks this in every participant before publishing one central event.
+- Monthly locks and cutoff locks both apply. Reopening a month does not move the cutoff. Reopening a cutoff does not silently reopen monthly periods. Closed months whose end is after the proposed retained cutoff must first be reopened latest-first using `reopenMonth()`. Monthly reopening continues to retain old snapshots; recompute them with `closeMonth()` after corrections, following the existing workflow.
+- In shared mode, journal services acquire the central lock before local transactions and hold it through local commit. Account opening flows also preserve enclosing central transaction levels when rolling back their own master/transaction work. If host code needs an outer tenant transaction, wrap it in `FiscalPeriodService::withClosingLock()` first; unprotected outer tenant transactions are rejected. This serializes shared-mode journal throughput. SQLite tests verify transaction boundaries/rollback, not native concurrent row locking; production drivers must provide transactional `lockForUpdate()` semantics. Direct SQL writes bypass service locks.
+
+Example:
+
+```php
+$closing = app(\ESolution\LaravelAccounting\Services\ClosingService::class);
+$event = $closing->closeThroughDate('2026-11-15', 'operator-12', 'November review');
+$closing->closeThroughDate('2026-11-20', 'operator-12', 'Advance after review');
+$closing->reopenCutoff('2026-11-15', 'Correct November 16 onward', 'operator-12');
+$date = $closing->getCutoffDate(); // '2026-11-15'
+$history = $closing->getCutoffHistory(); // close, advance, reopen
+```
+
+The initial event contains:
+
+```json
+{
+  "id": 1,
+  "action": "close",
+  "previous_cutoff_date": null,
+  "cutoff_date": "2026-11-15",
+  "actor_id": "operator-12",
+  "reason": "November review",
+  "created_at": "2026-11-16 12:00:00"
+}
+```
+
+Shared-mode example, after configuring and migrating central storage:
+
+```php
+$event = $closing->closeThroughDate('2026-11-15', 12, 'All branches reviewed', ['branch-a', 'branch-b']);
+$sameEvent = $closing->closeThroughDate('2026-11-15', 12); // Saved scope; safe completed retry.
+$closing->reopenCutoff('2026-11-10', 'Correct November 11 onward', 12);
+// Reopen any overlapping closed months in every tenant first when moving further back.
+```
+
+Shared events use the same fields shown above plus `"tenant_ids": ["branch-a", "branch-b"]`. They are returned once, not per tenant. Histories are read centrally in increasing event-ID order; local histories remain in their original databases.
 
 ### `GeneralLedgerService`
 

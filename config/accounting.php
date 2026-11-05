@@ -80,6 +80,31 @@ return [
         'start_month' => 1, // January
     ],
 
+    // Operational cutoff dates live in the database, never in environment config.
+    'closing' => [
+        // Earliest execution day for closeMonth(), bulk and shared month closing: null/empty keeps
+        // prior unrestricted timing; an integer 1–31 (clamped to the target month's last day); or
+        // 'month_end' for the target month's last day. Eligibility starts at midnight on that day.
+        'closing_day' => env('ACCOUNTING_CLOSING_DAY'),
+
+        // Which month closing_day belongs to: 'next' (default, the month after the selected month)
+        // or 'current' (the month being closed, e.g. month_end allows November from November 30).
+        // Never changes the selected month's transaction boundaries.
+        'closing_day_month' => env('ACCOUNTING_CLOSING_DAY_MONTH', 'next'),
+
+        // Enables persisted inclusive trx_date locks and cutoff close/reopen APIs. Default false.
+        // Monthly fiscal-period closing remains available when false.
+        'cutoff_enabled' => env('ACCOUNTING_CLOSING_CUTOFF_ENABLED', false),
+
+        // Cutoff storage policy when cutoff_enabled is true. Accepted: per_tenant (default) or shared.
+        // per_tenant stores one cutoff and audit history in each transaction database.
+        // shared stores one authoritative cutoff on master_data.connection (ACCOUNTING_MASTER_CONNECTION),
+        // independent of master_data.use_shared_database; that connection must be separate from every
+        // tenant transaction DB. Participating tenants come from the tenantIds argument of the first
+        // shared close and are persisted centrally for later calls.
+        'cutoff_mode' => env('ACCOUNTING_CLOSING_CUTOFF_MODE', 'per_tenant'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Route Settings
