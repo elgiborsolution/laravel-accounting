@@ -1,6 +1,6 @@
 # projectmem - laravel-accounting
 
-_Last updated: 2026-11-05_
+_Last updated: 2026-11-06_
 
 ## Project purpose
 `elgibor-solution/laravel-accounting` is a Laravel 11/12 accounting package that provides category-tree based chart-of-accounts management, journal entry storage, service-to-account mappings, monthly closing, and financial reporting.
@@ -25,7 +25,6 @@ _Last updated: 2026-11-05_
 - Refactor: Refactor code structure and remove redundant code blocks for improved readability and maintainability [config/accounting.php]
 
 ## Notes
-- feat: Enhance account detail response with category hierarchy and representations
 - Add feature tests for consolidated and tenant financial reports
 - feat: Implement ProfitLossSummaryService and ProfitLossSummaryCalculator for financial reporting
 - chore: Update documentation for ReportService and ConsolidatedReportService with tenant-specific reporting details
@@ -35,6 +34,7 @@ _Last updated: 2026-11-05_
 - feat: add tenant-specific profit/loss summary methods and related tests for financial reporting
 - gotcha: pwsh is unavailable in this Windows environment; context-mode shell already runs PowerShell, so use native commands directly.
 - New feature: Add comprehensive tests for BalanceSheetSummaryServices [config/accounting.php]
+- New feature: Add CentralReportingFixture and ReportingTenant for testing central reporting functionality [config/accounting.php]
 
 ## Key files
 - `database/factories/AccountFactory.php`
