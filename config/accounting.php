@@ -129,6 +129,39 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Central Reporting
+    |--------------------------------------------------------------------------
+    |
+    | Journals and closing stay in each tenant database. With change_log_enabled,
+    | journal/closing/cutoff writes also record their changed item in the tenant's
+    | reporting change log (same transaction). The accounting:reporting-* commands
+    | copy tenant data into central tables on master_data.connection
+    | (ACCOUNTING_MASTER_CONNECTION); the host registers their schedule.
+    | Supported only with shared master data (ACCOUNTING_USE_SHARED_DATABASE=true):
+    | accounts, categories and services are read from the master tables, never
+    | copied. Other configurations are rejected by the migrations, commands and
+    | central reads, and change_log_enabled is ignored for them.
+    |
+    | read_source: 'live' (default) keeps tenant-list reports on tenant databases;
+    | 'central' answers tenant-list balance-sheet/profit-loss reports, summaries,
+    | ranges and profit details from the central tables, without initializing
+    | tenants, and rejects them unless every selected tenant is backfilled,
+    | not failed or drifted, and synced within max_lag_seconds.
+    |
+    */
+    'reporting' => [
+        'read_source' => env('ACCOUNTING_REPORTING_READ_SOURCE', 'live'),
+        'change_log_enabled' => env('ACCOUNTING_REPORTING_CHANGE_LOG_ENABLED', false),
+        'max_lag_seconds' => env('ACCOUNTING_REPORTING_MAX_LAG_SECONDS', 900),
+        'batch_size' => 500,
+        'lock_seconds' => 600,
+        'retry_base_seconds' => 60,
+        'retry_max_seconds' => 3600,
+        'prune_after_days' => 7,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Route Settings
     |--------------------------------------------------------------------------
     |

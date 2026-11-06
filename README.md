@@ -129,6 +129,8 @@ php artisan db:seed --class="ESolution\LaravelAccounting\Database\Seeders\Accoun
 
 The service provider also loads the package migrations automatically when Laravel is running in console.
 
+All package migrations live in `database/migrations/accounting`. Tables owned by the master connection (`ACCOUNTING_MASTER_CONNECTION`), such as shared closing cutoffs and central reporting, are created only by a run on that connection (`php artisan migrate --database=<master connection>`, or plain `migrate` when it is the default). Tenant migration runs of the same files leave them alone. See [central reporting](docs/central-reporting.md).
+
 `AccountingSeeder` now includes the default ERP accounting service catalog, so a fresh installation starts with standard transaction services in `acc_services`.
 
 ## Configuration

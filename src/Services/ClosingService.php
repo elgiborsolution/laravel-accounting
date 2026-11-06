@@ -9,6 +9,7 @@ use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
+use ESolution\LaravelAccounting\Support\ReportingChangeLog;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use Exception;
 use Illuminate\Support\Carbon;
@@ -221,6 +222,9 @@ class ClosingService
                 'closed_by' => $userId,
             ]);
 
+            // One outbox row per month: the sync replaces the whole month's snapshot set.
+            app(ReportingChangeLog::class)->month($year, $month, 'closed', $this->transactionConnection());
+
             $this->clearCache();
 
             return $period;
@@ -360,6 +364,7 @@ class ClosingService
             DB::connection($connection)->table($this->tables->table('closing_cutoffs'))->where('id', 1)
                 ->update(['cutoff_date' => $date, 'updated_at' => $event['created_at']]);
             $id = DB::connection($connection)->table($this->tables->table('closing_cutoff_events'))->insertGetId($event);
+            app(ReportingChangeLog::class)->cutoff($event['action'], $connection);
             $this->clearCache();
 
             return ['id' => $id] + $event;
@@ -540,6 +545,9 @@ class ClosingService
                 'closed_at' => null,
                 'closed_by' => null,
             ]);
+
+            // Snapshots are retained (stale semantics); the sync copies the reopened month as-is.
+            app(ReportingChangeLog::class)->month($year, $month, 'reopened', $this->transactionConnection());
 
             $this->clearCache();
 

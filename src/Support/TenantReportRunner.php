@@ -15,6 +15,77 @@ class TenantReportRunner
      */
     public function run(array $tenantIds, callable $report): array
     {
+        $this->validateTenantList($tenantIds);
+        $tenancy = $this->tenancy();
+        $tenants = $this->resolveValidatedTenants($tenantIds);
+
+        $previousTenant = ($tenancy->initialized ?? false) ? ($tenancy->tenant ?? null) : null;
+        $previousConnection = DB::getDefaultConnection();
+
+        try {
+            $results = [];
+            foreach ($tenants as $tenant) {
+                $tenancy->initialize($tenant);
+
+                if (! ($tenancy->initialized ?? false)
+                    || (string) (($tenancy->tenant ?? null)?->getKey()) !== (string) $tenant->getKey()) {
+                    throw new RuntimeException('The requested report tenant could not be initialized.');
+                }
+
+                $results[] = [
+                    'tenant_id' => (string) $tenant->getKey(),
+                    'report' => $report(),
+                ];
+            }
+
+            return $results;
+        } finally {
+            try {
+                if ($previousTenant) {
+                    $tenancy->initialize($previousTenant);
+                } else {
+                    $tenancy->end();
+                }
+            } finally {
+                // Host tenancy teardown may select its central connection;
+                // preserve any default-connection override the caller had.
+                DB::setDefaultConnection($previousConnection);
+            }
+        }
+    }
+
+    /**
+     * Report entry points: accounting.reporting.read_source 'live' (default) delegates to run();
+     * 'central' validates and resolves the same list (canonical ids, aliases deduplicated),
+     * then reads central copies without initializing tenancy or using tenant connections.
+     */
+    public function runReports(array $tenantIds, callable $report): array
+    {
+        $source = config('accounting.reporting.read_source', 'live') ?? 'live';
+        if (! in_array($source, ['live', 'central'], true)) {
+            throw new RuntimeException('accounting.reporting.read_source must be live or central.');
+        }
+        if ($source === 'live') {
+            return $this->run($tenantIds, $report);
+        }
+
+        return app(CentralReportContext::class)->run($this->resolveTenants($tenantIds), $report);
+    }
+
+    /**
+     * Validate and resolve a tenant list without initializing tenancy.
+     *
+     * @return array<string, Model> canonical tenant id => tenant record, in first-seen order
+     */
+    public function resolveTenants(array $tenantIds): array
+    {
+        $this->validateTenantList($tenantIds);
+
+        return $this->resolveValidatedTenants($tenantIds);
+    }
+
+    protected function validateTenantList(array $tenantIds): void
+    {
         validator(['tenant_ids' => $tenantIds], [
             'tenant_ids' => ['required', 'array', 'list', 'min:1'],
             'tenant_ids.*' => ['required', function ($attribute, $value, $fail) {
@@ -23,8 +94,10 @@ class TenantReportRunner
                 }
             }],
         ])->validate();
+    }
 
-        $tenancy = $this->tenancy();
+    protected function resolveValidatedTenants(array $tenantIds): array
+    {
         $tenantModel = config('tenancy.tenant_model');
 
         if (! is_string($tenantModel) || ! is_subclass_of($tenantModel, Model::class)) {
@@ -64,39 +137,7 @@ class TenantReportRunner
             throw ValidationException::withMessages($errors);
         }
 
-        $previousTenant = ($tenancy->initialized ?? false) ? ($tenancy->tenant ?? null) : null;
-        $previousConnection = DB::getDefaultConnection();
-
-        try {
-            $results = [];
-            foreach ($tenants as $tenant) {
-                $tenancy->initialize($tenant);
-
-                if (! ($tenancy->initialized ?? false)
-                    || (string) (($tenancy->tenant ?? null)?->getKey()) !== (string) $tenant->getKey()) {
-                    throw new RuntimeException('The requested report tenant could not be initialized.');
-                }
-
-                $results[] = [
-                    'tenant_id' => (string) $tenant->getKey(),
-                    'report' => $report(),
-                ];
-            }
-
-            return $results;
-        } finally {
-            try {
-                if ($previousTenant) {
-                    $tenancy->initialize($previousTenant);
-                } else {
-                    $tenancy->end();
-                }
-            } finally {
-                // Host tenancy teardown may select its central connection;
-                // preserve any default-connection override the caller had.
-                DB::setDefaultConnection($previousConnection);
-            }
-        }
+        return $tenants;
     }
 
     protected function tenancy(): object

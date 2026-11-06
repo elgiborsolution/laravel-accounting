@@ -486,7 +486,7 @@ class ClosingCutoffTest extends TestCase
 
         // Unsupported: a master connection that is also a tenant transaction connection.
         config()->set('accounting.master_data.connection', 'cutoff_b');
-        (require dirname(__DIR__, 2).'/database/migrations/accounting-central/2026_11_04_000017_create_shared_closing_cutoffs_tables.php')->up();
+        $this->migrateSharedCutoffs();
         try {
             $closing->closeThroughDate('2026-11-15', 1, null, ['tenant-a', 'tenant-b']);
             $this->fail('A tenant transaction connection cannot store shared cutoffs.');
@@ -988,11 +988,23 @@ class ClosingCutoffTest extends TestCase
         $this->assertTrue(app(ClosingService::class)->closeMonth(2026, 10)->is_closed); // Null day keeps legacy timing.
     }
 
+    /** Run the shared cutoff migration as the central run: the master connection is the run's default. */
+    private function migrateSharedCutoffs(): void
+    {
+        $previous = DB::getDefaultConnection();
+        DB::setDefaultConnection(config('accounting.master_data.connection'));
+        try {
+            (require dirname(__DIR__, 2).'/database/migrations/accounting/2026_11_04_000017_create_shared_closing_cutoffs_tables.php')->up();
+        } finally {
+            DB::setDefaultConnection($previous);
+        }
+    }
+
     private function prepareSharedDatabases(bool $shared, string $prefix = 'acc_', string $connectionPrefix = ''): CutoffTenancyDouble
     {
         $this->prepareDatabases($shared, $prefix, $connectionPrefix);
         config()->set('accounting.closing.cutoff_mode', 'shared');
-        (require dirname(__DIR__, 2).'/database/migrations/accounting-central/2026_11_04_000017_create_shared_closing_cutoffs_tables.php')->up();
+        $this->migrateSharedCutoffs();
         Schema::connection('cutoff_master')->create('cutoff_tenants', function (Blueprint $table) {
             $table->string('id')->primary();
             $table->string('slug');

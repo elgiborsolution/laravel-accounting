@@ -9,6 +9,7 @@ use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\AccountRepository;
+use ESolution\LaravelAccounting\Support\CentralReportContext;
 use ESolution\LaravelAccounting\Support\ProfitLossSummaryCalculator;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use Illuminate\Database\Eloquent\Model;
@@ -58,7 +59,7 @@ class ConsolidatedReportService
     public function profitLossRange(array $range, array $tenantIds): array
     {
         $period = $this->reports->profitLossRangePeriod($range);
-        $sources = $this->tenants->run($tenantIds, function () use ($range) {
+        $sources = $this->tenants->runReports($tenantIds, function () use ($range) {
             return [
                 'payload' => $this->reports->profitLossRange($range)['report'],
                 'definitions' => $this->definitions(),
@@ -221,7 +222,7 @@ class ConsolidatedReportService
     {
         $this->reports->profitLossDetailMarkers();
 
-        return $this->tenants->run($tenantIds, fn () => array_map(
+        return $this->tenants->runReports($tenantIds, fn () => array_map(
             fn (array $month) => $this->reports->profitLossDetail($month['year'], $month['month']),
             $months
         ));
@@ -294,7 +295,7 @@ class ConsolidatedReportService
      */
     protected function balanceSheetSources(array $months, array $tenantIds): array
     {
-        return $this->tenants->run($tenantIds, function () use ($months) {
+        return $this->tenants->runReports($tenantIds, function () use ($months) {
             $statuses = $this->balanceSheetSnapshotStatuses($months);
 
             return [
@@ -320,14 +321,18 @@ class ConsolidatedReportService
     protected function balanceSheetSnapshotStatuses(array $months): array
     {
         $indexOf = fn ($year, $month) => (int) $year * 12 + (int) $month - 1;
-        $periods = FiscalPeriod::query()->get()->keyBy(fn (FiscalPeriod $period) => $indexOf($period->year, $period->month));
-        $snapshots = MonthlyBalance::query()
+        $central = app(CentralReportContext::class);
+        $periods = ($central->fiscalPeriods() ?? FiscalPeriod::query()->get())
+            ->keyBy(fn (FiscalPeriod $period) => $indexOf($period->year, $period->month));
+        $snapshots = ($central->snapshotCounts() ?? MonthlyBalance::query()
             ->selectRaw('fiscal_year, fiscal_month, COUNT(*) as snapshot_count')
-            ->groupBy('fiscal_year', 'fiscal_month')->get()
+            ->groupBy('fiscal_year', 'fiscal_month')->get())
             ->mapWithKeys(fn ($row) => [$indexOf($row->fiscal_year, $row->fiscal_month) => (int) $row->snapshot_count]);
         $legacy = $this->legacySignedSnapshotMonths()
             ->mapWithKeys(fn ($row) => [$indexOf($row->fiscal_year, $row->fiscal_month) => true]);
-        $earliest = JournalEntry::query()->where('status', JournalStatus::POSTED->value)->min('trx_date');
+        $earliest = $central->active()
+            ? $central->earliestPostedDate()
+            : JournalEntry::query()->where('status', JournalStatus::POSTED->value)->min('trx_date');
         $earliest = $earliest === null ? null : $indexOf(Carbon::parse($earliest)->year, Carbon::parse($earliest)->month);
 
         return array_map(function (array $month) use ($indexOf, $periods, $snapshots, $legacy, $earliest) {
@@ -358,10 +363,14 @@ class ConsolidatedReportService
      */
     protected function legacySignedSnapshotMonths(): Collection
     {
+        $central = app(CentralReportContext::class);
         $types = $this->categories->allOrdered()->pluck('type', 'id');
         $debitNormal = Account::query()->get(['id', 'category_id'])
             ->filter(fn (Account $account) => in_array(strtoupper((string) $types->get($account->category_id)), ['ASSET', 'EXPENSE'], true))
             ->modelKeys();
+        if ($central->active()) {
+            return $central->legacySignedSnapshotMonths($debitNormal);
+        }
 
         return collect($debitNormal)->chunk(500)->flatMap(fn (Collection $ids) => MonthlyBalance::query()
             ->whereIn('account_id', $ids->values()->all())
@@ -560,7 +569,7 @@ class ConsolidatedReportService
             'month' => ['required', 'integer', 'between:1,12'],
         ])->validate();
 
-        $sources = $this->tenants->run($tenantIds, function () use ($method, $year, $month) {
+        $sources = $this->tenants->runReports($tenantIds, function () use ($method, $year, $month) {
             return [
                 'payload' => $this->reports->{$method}($year, $month),
                 // Read metadata in the same context, including definitions

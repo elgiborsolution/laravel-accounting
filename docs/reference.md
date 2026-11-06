@@ -387,7 +387,7 @@ $closed = $closing->closeThroughCurrentMonth($userId);   // Includes the current
 Cutoff storage setup:
 
 - For `per_tenant`, run `2026_11_04_000016_create_acc_closing_cutoffs_tables.php` in every participating transaction database. The `accounting-migrations` tag includes these prefixed local state/audit tables. Journal entries, fiscal periods and monthly balances retain their existing transaction-database ownership in both modes. Master data continues to use its existing resolver.
-- For `shared`, set `ACCOUNTING_MASTER_CONNECTION` to a named Laravel connection defined in `database.connections`, and select `ACCOUNTING_CLOSING_CUTOFF_MODE=shared`. Publish `accounting-central-migrations`, then run `php artisan migrate --database=<master-connection> --path=database/migrations/accounting-central` once centrally. This separate directory is not auto-loaded with tenant migrations. Its migration requires shared mode and explicitly uses the master connection. It creates prefixed `shared_closing_cutoffs` and `shared_closing_cutoff_events`; both contain canonical `tenant_ids` JSON. The connection must remain stable during tenancy switching and must be separate from each tenant transaction connection. Do not configure another connection name pointing to the same tenant database.
+- For `shared`, set `ACCOUNTING_MASTER_CONNECTION` to a named Laravel connection defined in `database.connections`, and select `ACCOUNTING_CLOSING_CUTOFF_MODE=shared`. `2026_11_04_000017_create_shared_closing_cutoffs_tables.php` sits in the same auto-loaded `database/migrations/accounting` folder (`accounting-migrations` tag). It acts only on a run whose connection is the master connection, so run `php artisan migrate --database=<master-connection>` once centrally (plain `migrate` when the master connection is the default). Tenant runs of the same file create, recreate and drop nothing. It creates prefixed `shared_closing_cutoffs` and `shared_closing_cutoff_events`, both with canonical `tenant_ids` JSON, whenever a master connection is configured. The tables stay inert while `cutoff_mode` is `per_tenant`, so switching to `shared` later needs no further migration. Without a master connection the migration is a no-op. The connection must remain stable during tenancy switching and must be separate from each tenant transaction connection. Do not configure another connection name pointing to the same tenant database.
 
 Shared cutoff storage by master-data setting:
 
@@ -961,6 +961,46 @@ config([
 ```
 
 See [summary mapping and output examples](./profit-loss-summaries.md).
+
+### `ReportingSyncService`
+
+File: [`src/Services/ReportingSyncService.php`](/c:/laragon/www/package-custom/laravel-accounting/src/Services/ReportingSyncService.php)
+
+Copies tenant-local journals, fiscal periods, monthly snapshots and local cutoff state into central tables on `accounting.master_data.connection`. Accounts, categories and services are not copied: central reports read the existing master tables, and copied rows keep their central ids. The `accounting:reporting-*` commands wrap these methods; the host registers their schedule. See [central reporting](./central-reporting.md).
+
+Supported only with shared master data (`accounting.master_data.use_shared_database = true`). `Account`, `AccountCategory` and `Service` must resolve to a configured `master_data.connection` that holds their tables. Every method and every command first calls `CentralReportingRepository::assertUsable()`. That is `assertSupported()` plus a check that the central reporting tables exist. It throws `RuntimeException` otherwise, and commands print the message and exit 1. The central reporting migration (`2026_11_06_000019`, in the unified `database/migrations/accounting` folder) creates its tables only on a run whose connection is the master connection, and only when `supported()` is true. In every other case it is a no-op.
+
+| Method | Returns |
+| --- | --- |
+| `backfill(array $tenantIds, bool $force = false): array` | Registers tenants, copies everything, drains the outbox and reconciles. Rows: `{tenant_id, result, journals, months, applied, reconcile}`, or `skipped` when already complete. |
+| `sync(?array $tenantIds = null, ?int $maxBatches = null, bool $ignoreBackoff = false): array` | Rows: `{tenant_id, result: ok\|failed\|locked\|deferred\|not_backfilled, applied, drained, synced_through}`. `null` selects every registered tenant. |
+| `reconcile(?array $tenantIds = null, bool $repair = true): array` | Rows: `{tenant_id, result, status: ok\|drifted, found, remaining}`. `found` / `remaining` hold `journal_months`, `snapshot_months` and `cutoff`. |
+| `prune(?int $days = null, ?array $tenantIds = null): array` | Rows: `{tenant_id, result, pruned}`. Deletes acknowledged outbox rows only. |
+| `status(?array $tenantIds = null): array` | Rows: `{tenant_id, ready, reasons, lag_seconds, synced_through, backfill_status, sync_status, reconcile_status, reconciled_at, last_success_at, failures, next_attempt_at, last_error, cutoff_date, locked}`. |
+
+Tenant lists accept primary keys or route keys, like `TenantReportRunner`. Results use canonical tenant ids. A failing tenant returns `result: failed` and is recorded for backoff; other tenants still run.
+
+#### Central read source
+
+`accounting.reporting.read_source` (`ACCOUNTING_REPORTING_READ_SOURCE`) is `live` by default. With `central`, every tenant-list call reads the central copies and never initializes tenancy. Signatures and payloads are identical to `live`. This covers:
+- `ReportService::profitLoss`, `balanceSheet`, `profitLossRange` and `profitLossDetail`;
+- the `ConsolidatedReportService` profit/loss, balance-sheet, summary, range, by-tenant, by-month and profit-detail methods;
+- `ProfitLossSummaryService::summarize` and `summarizeRange`;
+- the `tenant_ids` HTTP report endpoints.
+
+Before any data is read, the configuration is validated as above (`RuntimeException` when unsupported). Then every selected tenant must be backfilled, not failed or drifted, and have `synced_through` within `accounting.reporting.max_lag_seconds`. Otherwise the call throws `ValidationException` under `reporting_sync`, naming each tenant and the reason. Master data is read from the master tables in the same central read transaction, so master edits are visible without a sync.
+
+Calls without a tenant list, `categoryTree()` / `AccountCategoryTreeService::index()` with tenant lists, general-ledger reports and closing operations remain live.
+
+`TenantReportRunner` gains two methods:
+- `runReports(array $tenantIds, callable $report): array` selects live or central;
+- `resolveTenants(array $tenantIds): array` validates and resolves a list without initializing tenancy.
+
+`run()` is unchanged.
+
+#### Reporting outbox
+
+With `accounting.reporting.change_log_enabled` and shared master data, package writes record `{aggregate_type: journal|month|cutoff, aggregate_key, operation}` rows in each tenant's `acc_reporting_change_log`, in the same transaction as the change. When the change log is enabled, `JournalService::journalManual($data, false)` and `post()` run their inserts/update in a transaction even without a caller transaction. Query-builder and raw SQL writes are not recorded; reconciliation repairs them. With tenant-local master data the flag is ignored and nothing is recorded.
 
 ## Support Registries
 
@@ -2752,4 +2792,5 @@ Example response:
 - There are no dedicated Form Request classes in the package; validation is handled inline in controllers.
 - Categories, accounts, and services are master-data endpoints.
 - Journals and fiscal-period/balance logic are transaction-data endpoints and follow the application's active connection.
+- With `accounting.reporting.read_source = central`, the profit-loss and balance-sheet endpoints answer `tenant_ids` requests from central reporting copies with unchanged payloads, and return a `reporting_sync` validation error when any selected tenant is not ready ([central reporting](./central-reporting.md)).
 - Route model binding is not used for these endpoints; the controllers read `id` manually and resolve tenant context through the `tenantId` route segment or `X-Tenant` header when present.

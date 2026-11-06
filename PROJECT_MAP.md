@@ -58,7 +58,7 @@ Delegation preserves monthly snapshot versus inclusive-range movement semantics,
 
 `src/Services/ClosingService.php` exposes `closeThroughDate(..., ?array $tenantIds = null)`, `reopenCutoff(..., ?array $tenantIds = null)`, `getCutoffDate()` and `getCutoffHistory()`. Local date closing verifies posted balance and advances only a date lock, independently per database; selected tenants return runner envelopes. Reopening requires an earlier retained date or null plus a reason and rejects overlapping/later closed months. State and audit commit atomically. Monthly reopening retains snapshots as before.
 
-Shared persistence lives centrally in `database/migrations/accounting-central/2026_11_04_000017_create_shared_closing_cutoffs_tables.php`, published separately by `AccountingServiceProvider` under `accounting-central-migrations`, never auto-loaded with tenant migrations. Prefixed `shared_closing_cutoffs` and `shared_closing_cutoff_events` store the authoritative date, canonical tenant scope and audit. They live on the configured master connection, which may also hold shared master metadata but cannot be a tenant transaction connection. Journal, fiscal-period and snapshot ownership is unchanged.
+Shared persistence lives centrally, created by `database/migrations/accounting/2026_11_04_000017_create_shared_closing_cutoffs_tables.php`. Since 2026-11-06 that file sits in the unified, auto-loaded folder (`accounting-migrations` tag); the `accounting-central` directory and tag were removed. Through `src/Traits/HandlesCentralMigration.php` it acts only on a run whose default connection is the configured master connection. Tenant runs never create, recreate or drop its tables. It is a no-op without a master connection and creates the (inert) tables whatever `cutoff_mode` is. Prefixed `shared_closing_cutoffs` and `shared_closing_cutoff_events` store the authoritative date, canonical tenant scope and audit. They live on the configured master connection, which may also hold shared master metadata but cannot be a tenant transaction connection. Journal, fiscal-period and snapshot ownership is unchanged.
 
 Shared operations use `TenantReportRunner` to validate/deduplicate primary IDs and route aliases, restore context, and reject saved scope mismatches. They hold the central singleton lock, validate all tenants, close complete months locally, and publish centrally only after every local commit succeeds. Mid-month totals never become snapshots. Failure retains the previous shared date/audit but can leave completed local months closed. Retrying skips closed months; repeating the current completed target returns its audit event. Shared reopening validates monthly dependencies across every participant before central publication. Scope changes require an explicit external migration/reconciliation, not an implicit subset close.
 
@@ -149,6 +149,82 @@ The figures are informational. They are not added to equity, the balance-sheet s
 - validation before tenant runs;
 - failure restoration.
 
+## Scoped update: central reporting (2026-11-06)
+
+Journals, posting, reversals, fiscal periods and closing remain tenant-local and unchanged. Tenant-list reports can be answered from central copies on `accounting.master_data.connection`. Defaults (`reporting.change_log_enabled = false`, `reporting.read_source = live`) preserve every prior behaviour; with them, the full pre-existing suite passes unchanged. Usage is in `docs/central-reporting.md`; signatures are in `docs/reference.md`.
+
+**Supported configuration (verified in source and tests):** shared master data only.
+- `accounting.master_data.use_shared_database` must be true, and `master_data.connection` must name a configured connection.
+- `Account`, `AccountCategory` and `Service` must resolve to that connection, and their tables must exist on it.
+- `CentralReportingRepository::assertSupported()` enforces this and throws `RuntimeException`. It runs:
+  - in the central reporting migration, which creates nothing unless the check passes (`supported()`), so unsupported installs migrate normally;
+  - via `assertUsable()` (which also requires `acc_reporting_sources`) at the start of every `ReportingSyncService` method and every `accounting:reporting-*` command (commands print the message and exit 1);
+  - via `assertUsable()` in `CentralReportContext::run()` before any central read.
+- Tenant-local master installs keep every existing live behaviour. `ReportingChangeLog::enabled()` is false for them even when `change_log_enabled` is true, so their accounting writes are unaffected and no outbox rows accumulate.
+- Accounts, categories and services are never copied. Central reports read the existing master tables, inside the same central read transaction as the tenant copies. Copied journal details and snapshots keep their central account/service ids.
+
+**Tenant outbox** (`database/migrations/accounting/2026_11_06_000018_create_acc_reporting_change_log_table.php`, transaction-owned, guarded):
+- Created by the normal tenant migrations in every mode. It is harmless and unused unless recording is enabled.
+- Columns: `{id, aggregate_type journal|month|cutoff, aggregate_key, operation, created_at, acknowledged_at}`.
+- `src/Support/ReportingChangeLog.php` (provider singleton) writes on the journal model connection.
+- Explicit records, inside the existing transactions:
+  - `JournalService::createJournalEntry()`: one row per created journal, plus the reversed original. When enabled it wraps header, details and log in a transaction, so `journalManual($data, false)` without a caller transaction becomes atomic.
+  - `postWithCutoff()` is transactional when enabled.
+  - `AccountOpeningBalanceService::replaceOpeningBalanceJournal()` records `updated`.
+  - `ClosingService` month close and reopen (`month:YYYY-MM`) and `changeCutoff()` (`cutoff:1`).
+- Model listeners, registered in provider `boot()` and inert when disabled:
+  - `JournalEntry` / `JournalEntryDetail` Eloquent create, update and delete (muted inside `createJournalEntry`);
+  - `FiscalPeriod` create and delete (implicit `firstOrCreate` periods).
+- Master deletions need no listener. With shared master data, master rows live on another connection and no foreign key cascades into tenant tables. Dangling account ids behave the same in live and central reads.
+- Query-builder/raw SQL writes are unsupported for the outbox and are left to reconciliation.
+
+**Central tables** (`database/migrations/accounting/2026_11_06_000019_create_acc_reporting_central_tables.php`, in the unified auto-loaded folder; the `accounting-reporting` directory, its publish tag and the never-deployed `000020` chart-copy drop migration were removed):
+- Creates five `acc_reporting_*` tables:
+  - `sources`: sync, backfill and reconcile state, freshness, lease and local cutoff metadata;
+  - `journal_entries`, `journal_entry_details`, `fiscal_periods` and `monthly_balances`, keyed by `(tenant_id, id)`.
+- Every copied row stores its exact source attributes in `payload`, plus typed query columns.
+- Ownership via `HandlesCentralMigration`:
+  - tables are created only when the run's default connection is the master connection (`migrate --database`, or a tenancy bootstrapper's per-tenant switch, sets it) and the configuration is supported;
+  - existing tables are never recreated, and `down()` drops only on the master-connection run;
+  - `tests/Feature/CentralReportingSyncTest.php` runs the whole folder as a tenant run and checks that no central table is created there or changed centrally.
+- `src/Repositories/CentralReportingRepository.php` owns configuration validation, leases with in-transaction fencing, atomic replace operations, readiness, backoff and the central report reads.
+
+**Sync** (`src/Services/ReportingSyncService.php`, new provider singleton):
+- Methods `backfill`, `sync`, `reconcile`, `prune`, `status`, exposed as `accounting:reporting-backfill|sync|reconcile|prune|status` in `src/Console/Commands/`. These are the package's first commands, registered in console. The host owns scheduling.
+- Each tenant runs through `TenantReportRunner::run([$id])` under a central lease. The master connection must differ from the tenant transaction connection.
+- Outbox rows are read in id order. Item state is re-read in one tenant read transaction (REPEATABLE READ on MySQL/MariaDB/PostgreSQL) and replaced in one central transaction. Exactly the fetched rows are acknowledged after the commit.
+- Months are replaced as whole period and snapshot sets, so reclosing replaces and reopening keeps rows.
+- `synced_through` (the run start) advances only when a run drains every row.
+- Failures set `sync_status = failed` with exponential backoff (`deferred` until retried).
+- Reconciliation compares order-independent per-month digests of every source row against the central payloads. It repairs mismatched months (up to three attempts) or, with detect-only, marks the tenant `drifted`. Backfill always ends with a reconcile.
+
+**Reads:**
+- `TenantReportRunner::runReports()` dispatches by `read_source`. `resolveTenants()` is extracted from `run()` with unchanged validation and error order.
+- `src/Support/CentralReportContext.php` (provider singleton) validates the configuration, then the readiness of all selected tenants. It runs the same report callbacks inside one central transaction and never initializes tenancy.
+- `ReportService` and `ConsolidatedReportService` read snapshots, fiscal periods, snapshot counts, the earliest posted date, legacy-sign rows and posted-movement queries through loaders that prefer the active central context. Master data comes from the unchanged `AccountCategoryRepository` / `AccountRepository` / `ServiceRepository` / `Account` calls. Calculations, payloads and stable-code checks are unchanged.
+- Central mode covers the tenant-list paths of `ReportService::profitLoss|balanceSheet|profitLossRange|profitLossDetail`, the in-scope `ConsolidatedReportService` methods and `ProfitLossSummaryService` (and therefore the `tenant_ids` HTTP report endpoints).
+- `categoryTree()`, general ledger, calls without a tenant list, and all closing operations stay live.
+- A selected tenant that is unregistered, not backfilled, failed, drifted or older than `reporting.max_lag_seconds` rejects the whole request under `reporting_sync`.
+
+**Tests** (local suite on PHP 8.4.20: 427 tests, 3097 assertions, all passing). They use SQLite and a host-tenancy double; deployed tenancy, other drivers and real concurrent processes are unverified.
+- `tests/Feature/CentralReportingParityTest.php`:
+  - 21 PHP entry points plus HTTP, identical live versus central with tenant databases disconnected and no tenancy initialization;
+  - master tables read directly, central ids in the copies, master edits visible without sync;
+  - unsupported configurations: tenant-local master data and missing master tables skip the migration and are rejected by sync, commands and reads; missing central tables are reported with instructions;
+  - every readiness rejection reason;
+  - direct-SQL repair.
+- `tests/Feature/CentralReportingSyncTest.php`:
+  - outbox paths, atomicity and rollback;
+  - Eloquent deletions;
+  - backfill with concurrent and unlogged changes;
+  - incremental, idempotent sync;
+  - reclose/reopen;
+  - out-of-order outbox ids;
+  - failed acknowledgement and failed central commit;
+  - leases and fencing, backoff, batching and freshness;
+  - unified-folder migration ownership (tenant runs and rollbacks, idempotent central re-runs, no master connection), prune and commands.
+- Shared fixture: `tests/Feature/Concerns/`.
+
 ## Evidence and scope
 
 - **Verified from source:** Composer metadata, all package PHP classes, routes, configuration, migrations, seeder implementations and representative localized data, hook stubs, and test definitions were inspected. Existing documentation was checked against source.
@@ -169,7 +245,7 @@ This is an embedded Laravel library, not a standalone application. Its core is a
 | Facade | `src/Facades/Accounting.php`; Composer alias `Accounting`; accessor `laravel-accounting` aliases `Services\AccountingService` |
 | Configuration | `config/accounting.php`, merged under `accounting` by the provider |
 | HTTP entry | `routes/api.php`, loaded unconditionally by provider boot; routes use configured middleware plus `accounting.api.exceptions` |
-| Database setup | `database/migrations/accounting/`, automatically loaded while running in console; publish tag `accounting-migrations` copies them to host `database/migrations/accounting` |
+| Database setup | `database/migrations/accounting/` (the only migration folder), automatically loaded while running in console; publish tag `accounting-migrations` copies them to host `database/migrations/accounting`. Master-connection-only migrations (`000017`, `000019`) act only on runs whose default connection is the master connection |
 | Published config | Console publish tag `accounting-config` copies config to host `config/accounting.php` |
 | Exception integration | Provider aliases `Http\Middleware\HandleAccountingApiExceptions` and registers a renderable callback when the host exception handler supports `renderable()` |
 | Host examples | `stubs/hooks/BeforeApiHook.php.stub`, `stubs/hooks/AfterApiHook.php.stub`, `postman_collection.json`, `penjualan_ppn.md` |
@@ -178,9 +254,9 @@ The usual dependency direction is HTTP controller or facade -> service -> reposi
 
 The provider registers these concrete singleton bindings:
 
-- Support: `ServiceCatalog`, `ServiceAccountTemplateRegistry`, `AccountingConnectionResolver`, `AccountingTableResolver`, `AccountingExceptionResponder`, `AccountingHookManager`, `ProfitLossSummaryCalculator`.
-- Repositories: `AccountCategoryRepository`, `AccountRepository`, `ServiceRepository`, `ServiceAccountRepository`, `JournalRepository`, `FiscalPeriodRepository`.
-- Services: `AccountingService`, `JournalService`, `CoaService`, `AccountCategoryTreeService`, `AccountBalanceService`, `GeneralLedgerService`, `AccountOpeningBalanceService`, `MappingService`, `ClosingService`, `FiscalPeriodService`, `ReportService`, `ConsolidatedReportService`, `ProfitLossSummaryService`, `ServiceManagementService`.
+- Support: `ServiceCatalog`, `ServiceAccountTemplateRegistry`, `AccountingConnectionResolver`, `AccountingTableResolver`, `AccountingExceptionResponder`, `AccountingHookManager`, `ProfitLossSummaryCalculator`, `ReportingChangeLog`, `CentralReportContext`.
+- Repositories: `AccountCategoryRepository`, `AccountRepository`, `ServiceRepository`, `ServiceAccountRepository`, `JournalRepository`, `FiscalPeriodRepository`, `CentralReportingRepository`.
+- Services: `AccountingService`, `JournalService`, `CoaService`, `AccountCategoryTreeService`, `AccountBalanceService`, `GeneralLedgerService`, `AccountOpeningBalanceService`, `MappingService`, `ClosingService`, `FiscalPeriodService`, `ReportService`, `ConsolidatedReportService`, `ProfitLossSummaryService`, `ServiceManagementService`, `ReportingSyncService` (2026-11-06).
 
 Services mix constructor injection with `app(...)` lookups. Bindings are concrete classes, not repository/service interfaces. Model connection resolution is dynamic rather than captured at singleton construction.
 
@@ -193,7 +269,7 @@ All keys are in `config/accounting.php`.
 | `table_prefix` | `acc_` | Models, migrations, and query builders construct accounting table names |
 | `default_language` | `env('ACCOUNTING_DEFAULT_LANGUAGE', 'id')` | Seeder datasets; `id` and `en`, otherwise Indonesian fallback |
 | `master_data.use_shared_database` | `env('ACCOUNTING_USE_SHARED_DATABASE', false)` | Enables shared master connection resolution |
-| `master_data.connection` | `env('ACCOUNTING_MASTER_CONNECTION')` | Named host database connection for master models/schema (only when `use_shared_database` is true); also the central store for shared closing cutoffs regardless of that flag |
+| `master_data.connection` | `env('ACCOUNTING_MASTER_CONNECTION')` | Named host database connection for master models/schema (only when `use_shared_database` is true); also the central store for shared closing cutoffs regardless of that flag, and for central reporting tables (which additionally require `use_shared_database` = true) |
 | `journal.auto_post` | `true` | Controls posting after **mapped** journal creation; manual/opening journals post immediately regardless |
 | `journal.number_format` | `JV/{YEAR}/{MONTH}/{SEQ}` | Number substitution in `JournalService::generateJournalNo()` |
 | `profit_loss_summary` | Literal `account_mappings` / `category_mappings` arrays | Editable in the host's published config and compatible with config caching; additive stable-code classifications for the two summary entry points only; account rules override category rules |
@@ -204,6 +280,7 @@ All keys are in `config/accounting.php`.
 | `closing.closing_day_month` | `env('ACCOUNTING_CLOSING_DAY_MONTH', 'next')` | Month the closing day belongs to: `current` or `next` |
 | `closing.cutoff_enabled` | `env('ACCOUNTING_CLOSING_CUTOFF_ENABLED', false)` | Enables persisted inclusive date cutoffs |
 | `closing.cutoff_mode` | `env('ACCOUNTING_CLOSING_CUTOFF_MODE', 'per_tenant')` | `per_tenant` (transaction DB) or `shared` (on `master_data.connection`) cutoff storage |
+| `reporting.*` | `read_source` `live`, `change_log_enabled` false, `max_lag_seconds` 900, `batch_size` 500, `lock_seconds` 600, `retry_base_seconds` 60, `retry_max_seconds` 3600, `prune_after_days` 7 | Central reporting outbox, sync and read source (2026-11-06 scoped update) |
 | `route.prefix` | `api/accounting` | Route group and exception-responder request matching |
 | `route.middleware` | `['api']` | Host-configurable route middleware; exception middleware is always appended and deduplicated |
 | `hooks.before`, `hooks.after` | `null`, `null` | Optional host hook classes resolved through the container |
@@ -347,8 +424,12 @@ Additional package migrations, in filename order:
 | `2026_07_15_000014_add_tenant_id_to_acc_accounts_table.php` | Master; guarded ownership column/index addition, already present in base migration |
 | `2026_07_30_000013_alter_posted_by_on_acc_journal_entries_table.php` | Transaction; changes posted-by to nullable string(100), skips SQLite; rollback changes to UUID |
 | `2026_08_03_000015_add_updated_by_to_acc_services_table.php` | Master; guarded nullable updated-by string(100) addition |
+| `2026_11_04_000016_create_acc_closing_cutoffs_tables.php` | Transaction; per-tenant cutoff state and audit |
+| `2026_11_04_000017_create_shared_closing_cutoffs_tables.php` | Master connection only (`HandlesCentralMigration`); shared cutoff state and audit; guarded |
+| `2026_11_06_000018_create_acc_reporting_change_log_table.php` | Transaction; reporting outbox; guarded |
+| `2026_11_06_000019_create_acc_reporting_central_tables.php` | Master connection only (`HandlesCentralMigration`) and supported configuration; central reporting tables; guarded |
 
-Master migrations use `HandlesMasterConnection::schema()` and skip existing master tables. Transaction migrations use default `Schema`; their initial table creation and reversal migration are not equivalently guarded. Filename timestamps determine ordering; numeric suffix `000013` is reused on different dates.
+Master migrations use `HandlesMasterConnection::schema()` and skip existing master tables. Static risk (pre-existing, unchanged): their `down()` targets the master connection from any run, so a tenant rollback in shared-master mode would drop master tables. The 2026-11-06 central migrations (`HandlesCentralMigration`) do not share this risk. Transaction migrations use default `Schema`; their initial table creation and reversal migration are not equivalently guarded. Filename timestamps determine ordering; numeric suffix `000013` is reused on different dates.
 
 `AccountingConnectionResolver::shouldCreateCrossConnectionForeignKeys()` returns true if shared mode is disabled or the configured master connection name equals the current/default transaction connection name. Otherwise transaction-to-master FKs are omitted. This comparison is by connection name, not physical database identity. Report-mapping FK creation uses the same check, even though both report mappings and accounts are master tables.
 
@@ -457,7 +538,7 @@ Source: `src/Contracts/BeforeApiHook.php`, `AfterApiHook.php`, `src/Support/Acco
 - Service create/update invokes the hook manager itself, including direct PHP calls; controllers avoid double wrapping those two actions. Other direct services, including journal, CoA, closing, opening-balance service, and reports, have no automatic hook lifecycle.
 - After hooks run after the business handler returns; journal/service transactions have already committed. There is no failure hook, hook chain, transaction-wide wrapper, or queued hook execution. After-hook failure can therefore report failure after persistence and before controller cache invalidation.
 - `src/Contracts/AccountingHook.php` and `src/Support/NullAccountingHook.php` implement an older beforeHandle/afterHandle contract; the current manager does not reference them. Hook stubs are examples to copy into the host; provider does not publish/register them.
-- No custom domain events/listeners/observers/jobs are defined or registered. Eloquent callbacks in `HasUuid` and `JournalEntry::booted()` are the active model lifecycle logic.
+- No custom domain events or jobs are defined. Eloquent callbacks in `HasUuid` and `JournalEntry::booted()` are the active model lifecycle logic; since 2026-11-06 the provider also registers `ReportingChangeLog` model listeners (journals, details, fiscal periods), which only write outbox rows when `reporting.change_log_enabled` is true and master data is shared.
 
 ### Cache behavior
 
@@ -479,9 +560,9 @@ Other exceptions become HTTP 500 with `{success: false, message, error_code}`: `
 4. Provider loads migrations from source in console and optionally publishes copies. Inspect the host migration inventory and history before choosing execution paths; do not blindly execute both copies or replay unguarded transaction migrations. Shared master guards do not make every migration idempotent or rollbacks tenant-safe.
 5. Run master seeders in dependency order on the intended master/current connection if defaults are needed. Code `3001` is required specifically for account-level opening balances. Default catalog/template code constants are integration identifiers, and localized seeding updates existing records.
 6. For tenancy support, install/configure the host tenancy system, tenant model, middleware, switching and teardown lifecycle. The package declares no `stancl/tenancy` dependency. Direct PHP callers normally initialize the desired tenant themselves; ledger details offers an explicit temporary override, and profit/loss and balance sheet offer explicit tenant lists through `TenantReportRunner`.
-7. Host source records may link through `source_type/source_id` and reference number. No polymorphic source relation, host-table FK, idempotency key, outbox, currency conversion, or transaction-source duplicate prevention exists.
+7. Host source records may link through `source_type/source_id` and reference number. No polymorphic source relation, host-table FK, idempotency key, currency conversion, or transaction-source duplicate prevention exists. The only outbox is the opt-in central reporting change log (2026-11-06), which records accounting items, not host source records.
 
-There are no package Artisan command classes, scheduled tasks, frontend publishing, translations runtime, or Composer scripts. Only PHP/framework runtime dependencies are declared; Composer has no `require-dev`, checked-in lockfile, PHPUnit configuration, or CI workflow in this checkout.
+Since 2026-11-06 the package ships the `accounting:reporting-*` Artisan commands (console-only registration); it registers no scheduled tasks, frontend publishing, translations runtime, or Composer scripts. Only PHP/framework runtime dependencies are declared; Composer has no `require-dev`, checked-in lockfile, PHPUnit configuration, or CI workflow in this checkout.
 
 ## Existing tests and verification boundaries
 

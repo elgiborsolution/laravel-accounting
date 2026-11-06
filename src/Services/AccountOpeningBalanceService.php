@@ -7,6 +7,7 @@ use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\JournalEntryDetail;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\ReportingChangeLog;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -323,6 +324,9 @@ class AccountOpeningBalanceService
                 'credit' => $contraLineType === 'K' ? round($amount, 2) : 0,
                 'description' => $description,
             ]);
+
+        // Query-builder edits bypass model listeners; record explicitly inside runAtomic().
+        app(ReportingChangeLog::class)->journal($journal->id, 'updated', $transactionConnection);
 
         $tags = ['acc_journals'];
         if ($account->tenant_id) {

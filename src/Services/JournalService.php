@@ -17,6 +17,7 @@ use ESolution\LaravelAccounting\Repositories\JournalRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceAccountRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\ReportingChangeLog;
 use ESolution\LaravelAccounting\Support\ServiceCatalog;
 use Exception;
 use Illuminate\Support\Carbon;
@@ -420,7 +421,8 @@ class JournalService
 
     protected function postWithCutoff($id, int|string|null $postedBy)
     {
-        if (! config('accounting.closing.cutoff_enabled', false)) {
+        // The status update and its reporting outbox row (model listener) must commit together.
+        if (! config('accounting.closing.cutoff_enabled', false) && ! app(ReportingChangeLog::class)->enabled()) {
             return $this->postJournal($id, $postedBy);
         }
 
@@ -549,6 +551,26 @@ class JournalService
     }
 
     protected function createJournalEntry(array $attributes, array $details = []): JournalEntry
+    {
+        $log = app(ReportingChangeLog::class);
+        if (! $log->enabled()) {
+            return $this->insertJournalEntry($attributes, $details);
+        }
+
+        // Header, details and the outbox row commit together, even for journalManual($data, false)
+        // without a caller transaction (a nested call becomes a savepoint).
+        return DB::connection($log->connectionName())->transaction(function () use ($log, $attributes, $details) {
+            $journal = $log->muted(fn () => $this->insertJournalEntry($attributes, $details));
+            $log->journal($journal->id, ! empty($attributes['is_reversal']) ? 'reversed' : 'created');
+            if (! empty($attributes['reversal_of_id'])) {
+                $log->journal($attributes['reversal_of_id'], 'reversed');
+            }
+
+            return $journal;
+        });
+    }
+
+    protected function insertJournalEntry(array $attributes, array $details = []): JournalEntry
     {
         $journal = JournalEntry::create($attributes);
 

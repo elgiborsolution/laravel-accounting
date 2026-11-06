@@ -9,6 +9,7 @@ use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Repositories\ServiceRepository;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\CentralReportContext;
 use ESolution\LaravelAccounting\Support\ProfitLossSummaryCalculator;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use Illuminate\Support\Carbon;
@@ -109,7 +110,7 @@ class ReportService
     public function profitLoss($year, $month, ?array $tenantIds = null)
     {
         if ($tenantIds !== null) {
-            return app(TenantReportRunner::class)->run($tenantIds, fn () => $this->profitLoss($year, $month));
+            return app(TenantReportRunner::class)->runReports($tenantIds, fn () => $this->profitLoss($year, $month));
         }
 
         $tree = $this->buildTreeWithBalances($year, $month);
@@ -133,7 +134,7 @@ class ReportService
     {
         $period = $this->profitLossRangePeriod($range);
         if ($tenantIds !== null) {
-            $reports = app(TenantReportRunner::class)->run(
+            $reports = app(TenantReportRunner::class)->runReports(
                 $tenantIds, fn () => $this->buildProfitLossRangeReport($period)
             );
 
@@ -175,7 +176,7 @@ class ReportService
     public function balanceSheet($year, $month, ?array $tenantIds = null)
     {
         if ($tenantIds !== null) {
-            return app(TenantReportRunner::class)->run($tenantIds, fn () => $this->balanceSheet($year, $month));
+            return app(TenantReportRunner::class)->runReports($tenantIds, fn () => $this->balanceSheet($year, $month));
         }
 
         $tree = $this->buildTreeWithBalances($year, $month);
@@ -207,7 +208,7 @@ class ReportService
         $period = app(ProfitLossSummaryCalculator::class)->period($year, $month);
         $markers = $this->profitLossDetailMarkers();
         if ($tenantIds !== null) {
-            return app(TenantReportRunner::class)->run($tenantIds, fn () => $this->buildProfitLossDetail($period, $markers));
+            return app(TenantReportRunner::class)->runReports($tenantIds, fn () => $this->buildProfitLossDetail($period, $markers));
         }
 
         return $this->buildProfitLossDetail($period, $markers);
@@ -273,16 +274,12 @@ class ReportService
             return collect();
         }
 
-        $connection = DB::connection($this->transactionConnection());
-        $details = $this->tables->table('journal_entry_details');
-        $journals = $this->tables->table('journal_entries');
-        $grammar = $connection->getQueryGrammar();
+        [$query, $details, $journals, $grammar] = $this->movementQuery();
         $excludedSourceTypes = array_values(array_unique(array_merge(
             ['OPENING_BALANCE', AccountOpeningBalanceService::SOURCE_TYPE], $closingSourceTypes
         )));
 
-        return $connection->table($details)
-            ->join($journals, $journals.'.id', '=', $details.'.journal_entry_id')
+        return $query
             ->whereIn($details.'.account_id', $accountIds)
             ->when($from !== null, fn ($query) => $query->whereDate($journals.'.trx_date', '>=', $from))
             ->whereDate($journals.'.trx_date', $inclusive ? '<=' : '<', $to)
@@ -363,13 +360,9 @@ class ReportService
 
         $start = Carbon::create($period['start_year'], $period['start_month'], 1)->toDateString();
         $end = Carbon::create($period['end_year'], $period['end_month'], 1)->endOfMonth()->toDateString();
-        $connection = DB::connection($this->transactionConnection());
-        $details = $this->tables->table('journal_entry_details');
-        $journals = $this->tables->table('journal_entries');
-        $grammar = $connection->getQueryGrammar();
+        [$query, $details, $journals, $grammar] = $this->movementQuery();
 
-        return $connection->table($details)
-            ->join($journals, $journals.'.id', '=', $details.'.journal_entry_id')
+        return $query
             ->whereIn($details.'.account_id', $accountIds)
             ->whereDate($journals.'.trx_date', '>=', $start)
             ->whereDate($journals.'.trx_date', '<=', $end)
@@ -389,11 +382,12 @@ class ReportService
     protected function buildTreeWithBalances($year, $month): Collection
     {
         $accounts = $this->accounts->allOrdered();
-        $balances = MonthlyBalance::on($this->transactionConnection())
-            ->where('fiscal_year', $year)
-            ->where('fiscal_month', $month)
-            ->get()
-            ->keyBy('account_id');
+        $balances = $this->central()->monthlyBalances((int) $year, (int) $month)
+            ?? MonthlyBalance::on($this->transactionConnection())
+                ->where('fiscal_year', $year)
+                ->where('fiscal_month', $month)
+                ->get()
+                ->keyBy('account_id');
 
         $tree = $this->treeService->getTree(
             $this->categories->allOrdered(),
@@ -468,5 +462,30 @@ class ReportService
     protected function transactionConnection(): ?string
     {
         return app(AccountingConnectionResolver::class)->resolveTransactionDataConnection();
+    }
+
+    /** Central tenant copies while a central-mode tenant report runs; master data is always read live. */
+    protected function central(): CentralReportContext
+    {
+        return app(CentralReportContext::class);
+    }
+
+    /** Posted-movement base query: details joined to headers on the transaction or central connection. */
+    protected function movementQuery(): array
+    {
+        if ($central = $this->central()->movementQuery()) {
+            return $central;
+        }
+
+        $connection = DB::connection($this->transactionConnection());
+        $details = $this->tables->table('journal_entry_details');
+        $journals = $this->tables->table('journal_entries');
+
+        return [
+            $connection->table($details)->join($journals, $journals.'.id', '=', $details.'.journal_entry_id'),
+            $details,
+            $journals,
+            $connection->getQueryGrammar(),
+        ];
     }
 }

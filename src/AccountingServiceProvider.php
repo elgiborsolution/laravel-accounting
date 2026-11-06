@@ -31,6 +31,15 @@ use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use ESolution\LaravelAccounting\Support\ProfitLossSummaryCalculator;
 use ESolution\LaravelAccounting\Http\Middleware\HandleAccountingApiExceptions;
 use ESolution\LaravelAccounting\Services\ServiceManagementService;
+use ESolution\LaravelAccounting\Console\Commands\ReportingBackfillCommand;
+use ESolution\LaravelAccounting\Console\Commands\ReportingPruneCommand;
+use ESolution\LaravelAccounting\Console\Commands\ReportingReconcileCommand;
+use ESolution\LaravelAccounting\Console\Commands\ReportingStatusCommand;
+use ESolution\LaravelAccounting\Console\Commands\ReportingSyncCommand;
+use ESolution\LaravelAccounting\Repositories\CentralReportingRepository;
+use ESolution\LaravelAccounting\Services\ReportingSyncService;
+use ESolution\LaravelAccounting\Support\CentralReportContext;
+use ESolution\LaravelAccounting\Support\ReportingChangeLog;
 use Illuminate\Support\ServiceProvider;
 
 class AccountingServiceProvider extends ServiceProvider
@@ -178,6 +187,25 @@ class AccountingServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(ReportingChangeLog::class, fn () => new ReportingChangeLog);
+        $this->app->singleton(CentralReportingRepository::class, function ($app) {
+            return new CentralReportingRepository(
+                $app->make(AccountingConnectionResolver::class),
+                $app->make(AccountingTableResolver::class)
+            );
+        });
+        $this->app->singleton(CentralReportContext::class, function ($app) {
+            return new CentralReportContext($app->make(CentralReportingRepository::class));
+        });
+        $this->app->singleton(ReportingSyncService::class, function ($app) {
+            return new ReportingSyncService(
+                $app->make(CentralReportingRepository::class),
+                $app->make(ReportingChangeLog::class),
+                $app->make(AccountingTableResolver::class),
+                $app->make(AccountingConnectionResolver::class)
+            );
+        });
+
         $this->app->singleton(ServiceManagementService::class, function ($app) {
             return new ServiceManagementService(
                 $app->make(ServiceRepository::class),
@@ -192,6 +220,9 @@ class AccountingServiceProvider extends ServiceProvider
     {
         $this->registerAccountingExceptionRendering();
 
+        // Reporting outbox listeners are inert unless accounting.reporting.change_log_enabled.
+        $this->app->make(ReportingChangeLog::class)->registerModelListeners();
+
         // Load routes
         $this->loadRoutesFrom(__DIR__.'/../routes/api.php');
 
@@ -204,14 +235,21 @@ class AccountingServiceProvider extends ServiceProvider
                 __DIR__.'/../config/accounting.php' => config_path('accounting.php'),
             ], 'accounting-config');
 
-            // Publish migrations
+            // Publish migrations. One folder: master-connection tables (shared cutoffs, central
+            // reporting) act only on runs that target the master connection, so tenant runs of the
+            // same files never create, recreate or drop them (see HandlesCentralMigration).
             $this->publishes([
                 __DIR__.'/../database/migrations/accounting/' => database_path('migrations/accounting'),
             ], 'accounting-migrations');
 
-            $this->publishes([
-                __DIR__.'/../database/migrations/accounting-central/' => database_path('migrations/accounting-central'),
-            ], 'accounting-central-migrations');
+            // The host registers the schedule for these commands.
+            $this->commands([
+                ReportingBackfillCommand::class,
+                ReportingSyncCommand::class,
+                ReportingReconcileCommand::class,
+                ReportingPruneCommand::class,
+                ReportingStatusCommand::class,
+            ]);
         }
     }
 
