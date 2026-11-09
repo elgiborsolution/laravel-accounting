@@ -486,8 +486,10 @@ class ConsolidatedReportService
      */
     public function categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array
     {
-        $sources = $this->tenants->run($tenantIds, function () use ($year, $month, $withBalance) {
-            $tenantId = $this->categoryTenantIdentifier();
+        // read_source = central: master tables plus central snapshot/journal copies, no tenant initialization.
+        $sources = $this->tenants->runReports($tenantIds, function () use ($year, $month, $withBalance) {
+            // Central mode names the tenant being read without initializing tenancy.
+            $tenantId = app(CentralReportContext::class)->tenantId() ?? $this->categoryTenantIdentifier();
             $categories = $this->categories->allOrdered();
             $accounts = $this->accounts->visibleOrdered($tenantId);
             $balances = $withBalance

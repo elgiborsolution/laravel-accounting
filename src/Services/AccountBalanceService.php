@@ -9,6 +9,7 @@ use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
 use ESolution\LaravelAccounting\Repositories\FiscalPeriodRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
+use ESolution\LaravelAccounting\Support\CentralReportContext;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -43,7 +44,7 @@ class AccountBalanceService
         $accountRecords = $this->accounts->findManyByIds($accountIds);
         $categoryTypes = $this->categories->allOrdered()->pluck('type', 'id');
 
-        $currentBalances = MonthlyBalance::query()
+        $currentBalances = $this->snapshotQuery()
             ->whereIn('account_id', $accountIds)
             ->where('fiscal_year', $year)
             ->where('fiscal_month', $month)
@@ -55,7 +56,7 @@ class AccountBalanceService
         $currentTotals = $this->loadJournalTotals($missingIds->all(), $periodStart, $periodEnd);
 
         $carryForwardTotals = collect();
-        $latestJournalDate = $this->periods->resolveEarliestJournalDate();
+        $latestJournalDate = $this->earliestJournalDate();
         $carryStartFallback = $latestJournalDate ?: $periodStart;
         $carryEnd = $periodStart->copy()->subDay()->endOfDay();
 
@@ -129,7 +130,7 @@ class AccountBalanceService
             return collect();
         }
 
-        return MonthlyBalance::query()
+        return $this->snapshotQuery()
             ->whereIn('account_id', $accountIds)
             ->where(function ($query) use ($year, $month) {
                 $query->where('fiscal_year', '<', $year)
@@ -157,7 +158,7 @@ class AccountBalanceService
                 $startDate = Carbon::create($previous->fiscal_year, $previous->fiscal_month, 1)->endOfMonth()->addDay()->startOfDay();
             } else {
                 $key = '__earliest__';
-                $startDate = $this->periods->resolveEarliestJournalDate() ?: Carbon::now()->startOfDay();
+                $startDate = $this->earliestJournalDate() ?: Carbon::now()->startOfDay();
             }
 
             if (! isset($groups[$key])) {
@@ -182,6 +183,22 @@ class AccountBalanceService
 
         if ($accountIds === [] || $startDate->gt($endDate)) {
             return collect();
+        }
+
+        if ($central = app(CentralReportContext::class)->movementQuery()) {
+            [$query, $details, $journals, $grammar] = $central;
+
+            return $query
+                ->whereIn($details.'.account_id', $accountIds)
+                ->whereDate($journals.'.trx_date', '>=', $startDate->toDateString())
+                ->whereDate($journals.'.trx_date', '<=', $endDate->toDateString())
+                ->where($journals.'.status', JournalStatus::POSTED->value)
+                ->groupBy($details.'.account_id')
+                ->select($details.'.account_id')
+                ->selectRaw('SUM('.$grammar->wrap($details.'.debit').') as total_debit')
+                ->selectRaw('SUM('.$grammar->wrap($details.'.credit').') as total_credit')
+                ->get()
+                ->keyBy('account_id');
         }
 
         $tablePrefix = $this->tables->tablePrefix();
@@ -233,6 +250,26 @@ class AccountBalanceService
     protected function normalizeCategoryType(?string $type): string
     {
         return strtoupper($type ?: 'ASSET');
+    }
+
+    /**
+     * Snapshot rows: the central copies of the current tenant while a central-mode tenant report
+     * runs (read_source = central), otherwise MonthlyBalance on the transaction connection.
+     */
+    protected function snapshotQuery(): mixed
+    {
+        return app(CentralReportContext::class)->balanceQuery() ?? MonthlyBalance::query();
+    }
+
+    /** Earliest journal date (any status), from the central copies in central mode. */
+    protected function earliestJournalDate(): ?Carbon
+    {
+        [$central, $date] = app(CentralReportContext::class)->earliestJournalDate();
+        if (! $central) {
+            return $this->periods->resolveEarliestJournalDate();
+        }
+
+        return $date ? Carbon::parse($date) : null;
     }
 
     protected function transactionConnection(): ?string

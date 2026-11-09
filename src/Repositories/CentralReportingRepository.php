@@ -426,6 +426,18 @@ class CentralReportingRepository
             ->where('status', JournalStatus::POSTED->value)->min('trx_date');
     }
 
+    /** Earliest journal date of any status, as FiscalPeriodRepository::resolveEarliestJournalDate() reads it. */
+    public function earliestJournalDate(string $tenantId): mixed
+    {
+        return $this->db()->table($this->table('journal_entries'))->where('tenant_id', $tenantId)->min('trx_date');
+    }
+
+    /** One tenant's copied snapshot rows, with the MonthlyBalance column names AccountBalanceService filters on. */
+    public function balanceQuery(string $tenantId): \Illuminate\Database\Query\Builder
+    {
+        return $this->db()->table($this->table('monthly_balances'))->where('tenant_id', $tenantId);
+    }
+
     /** Same predicate as ConsolidatedReportService::legacySignedSnapshotMonths() on the copied rows. */
     public function legacySignedSnapshotMonths(string $tenantId, array $debitNormalAccountIds): Collection
     {

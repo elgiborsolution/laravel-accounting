@@ -83,6 +83,17 @@ class CentralReportContext
         return $this->central->legacySignedSnapshotMonths($this->current['tenant_id'], $debitNormalAccountIds);
     }
 
+    /** @return array{0: bool, 1: mixed} [active, earliest journal date of any status] */
+    public function earliestJournalDate(): array
+    {
+        return $this->active() ? [true, $this->central->earliestJournalDate($this->current['tenant_id'])] : [false, null];
+    }
+
+    public function balanceQuery(): ?\Illuminate\Database\Query\Builder
+    {
+        return $this->active() ? $this->central->balanceQuery($this->current['tenant_id']) : null;
+    }
+
     public function movementQuery(): ?array
     {
         return $this->active() ? $this->central->movementQuery($this->current['tenant_id']) : null;

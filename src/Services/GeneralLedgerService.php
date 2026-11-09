@@ -8,6 +8,7 @@ use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\GeneralLedgerPaginator;
+use ESolution\LaravelAccounting\Support\CentralReportContext;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
@@ -149,7 +150,8 @@ class GeneralLedgerService
             'end_date' => ['required', 'date_format:Y-m-d', 'after_or_equal:start_date'],
         ])->validate();
 
-        $sources = app(TenantReportRunner::class)->run($tenantIds, function () use ($accountCode, $startDate, $endDate) {
+        // read_source = central answers from the central copies without initializing tenants.
+        $sources = app(TenantReportRunner::class)->runReports($tenantIds, function () use ($accountCode, $startDate, $endDate) {
             $account = $this->accounts->findByCode($accountCode);
             if (! $account) {
                 return ['error' => 'missing_account'];
@@ -222,12 +224,16 @@ class GeneralLedgerService
 
     protected function accountActivityTotals(string $accountId, string $startDate, string $endDate, bool $debitNormal): array
     {
-        $connection = DB::connection($this->connections->resolveTransactionDataConnection());
-        $details = $this->tables->table('journal_entry_details');
-        $journals = $this->tables->table('journal_entries');
-        $grammar = $connection->getQueryGrammar();
-        $totals = $connection->table($details)
-            ->join($journals, $journals.'.id', '=', $details.'.journal_entry_id')
+        if ($central = app(CentralReportContext::class)->movementQuery()) {
+            [$query, $details, $journals, $grammar] = $central;
+        } else {
+            $connection = DB::connection($this->connections->resolveTransactionDataConnection());
+            $details = $this->tables->table('journal_entry_details');
+            $journals = $this->tables->table('journal_entries');
+            $grammar = $connection->getQueryGrammar();
+            $query = $connection->table($details)->join($journals, $journals.'.id', '=', $details.'.journal_entry_id');
+        }
+        $totals = $query
             ->where($details.'.account_id', $accountId)
             ->whereDate($journals.'.trx_date', '>=', $startDate)
             ->whereDate($journals.'.trx_date', '<=', $endDate)

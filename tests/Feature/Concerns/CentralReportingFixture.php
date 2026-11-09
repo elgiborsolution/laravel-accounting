@@ -10,7 +10,11 @@ use ESolution\LaravelAccounting\Models\JournalEntry;
 use ESolution\LaravelAccounting\Models\JournalEntryDetail;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Models\Service;
+use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
+use ESolution\LaravelAccounting\Repositories\AccountRepository;
 use ESolution\LaravelAccounting\Services\ClosingService;
+use ESolution\LaravelAccounting\Services\ConsolidatedReportService;
+use ESolution\LaravelAccounting\Services\ReportService;
 use ESolution\LaravelAccounting\Services\JournalService;
 use ESolution\LaravelAccounting\Services\ReportingSyncService;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
@@ -110,6 +114,28 @@ trait CentralReportingFixture
             protected function tenancy(): object
             {
                 return $this->hostTenancy;
+            }
+        });
+        // Category consolidation identifies the live tenant through the host tenancy double (as
+        // CategoryRetrievalServiceTest does); central mode must never reach this override.
+        $tenancy = $this->tenancy;
+        $this->app->singleton(ConsolidatedReportService::class, fn ($app) => new class(
+            $app->make(ReportService::class), $app->make(TenantReportRunner::class),
+            $app->make(AccountCategoryRepository::class), $app->make(AccountRepository::class), $tenancy
+        ) extends ConsolidatedReportService
+        {
+            public function __construct(ReportService $reports, TenantReportRunner $tenants, AccountCategoryRepository $categories, AccountRepository $accounts, private object $hostTenancy)
+            {
+                parent::__construct($reports, $tenants, $categories, $accounts);
+            }
+
+            protected function categoryTenantIdentifier(): string
+            {
+                if (! $this->hostTenancy->initialized) {
+                    throw new \RuntimeException('categoryTenantIdentifier() needs an initialized tenant.');
+                }
+
+                return (string) $this->hostTenancy->tenant->getKey();
             }
         });
         DB::setDefaultConnection('rp_caller');

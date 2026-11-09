@@ -139,15 +139,16 @@ Central mode covers every tenant-list entry point of:
 - `ReportService::profitLoss`, `balanceSheet`, `profitLossRange` and `profitLossDetail`;
 - `ConsolidatedReportService` profit/loss, balance-sheet, summary, range, by-tenant, by-month and profit-detail methods;
 - `ProfitLossSummaryService::summarize` and `summarizeRange`;
+- `ConsolidatedReportService::categoryTree()` and `AccountCategoryTreeService::index()` with tenant lists, including balances; `AccountBalanceService` reads central snapshots, journal totals and the earliest journal date while a central report runs;
+- `GeneralLedgerService::getAccountBreakdown()`;
 - the `tenant_ids` HTTP report endpoints.
 
-Signatures, tenant validation and aliases, payloads, calculations and stable-code checks are unchanged. Central reports do not initialize tenancy or open tenant connections.
+Signatures, tenant validation and aliases, payloads, calculations and stable-code checks are unchanged. Central reports do not initialize tenancy, switch the default connection or open tenant connections. Per-tenant outputs (`...ByTenant`, `tenants` rows, runner envelopes) group the central rows by tenant. There is no fallback: an unsupported, uninstalled or unready setup rejects the call instead of querying tenant databases.
 
 **Not covered** (these stay live in both modes):
-- calls without a tenant list, which use the active connection;
-- `ConsolidatedReportService::categoryTree()` and `AccountCategoryTreeService::index()` with tenant lists, which use the live balance engine;
-- general-ledger reports, trial balance and cash flow;
-- all closing operations.
+- calls without a tenant list, which use the active connection exactly as before;
+- methods that take no tenant filter: `ReportService::generalLedger`, `trialBalance` and `cashFlow`, and `GeneralLedgerService` ledger and detail methods;
+- all closing operations, which write tenant data and are not reports.
 
 ## Mutation paths
 

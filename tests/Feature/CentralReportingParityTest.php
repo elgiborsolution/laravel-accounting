@@ -2,7 +2,9 @@
 
 namespace ESolution\LaravelAccounting\Tests\Feature;
 
+use ESolution\LaravelAccounting\Services\AccountCategoryTreeService;
 use ESolution\LaravelAccounting\Services\ConsolidatedReportService;
+use ESolution\LaravelAccounting\Services\GeneralLedgerService;
 use ESolution\LaravelAccounting\Services\ProfitLossSummaryService;
 use ESolution\LaravelAccounting\Services\ReportingSyncService;
 use ESolution\LaravelAccounting\Services\ReportService;
@@ -47,6 +49,19 @@ class CentralReportingParityTest extends TestCase
             'per-tenant profitLossDetail' => fn () => $reports->profitLossDetail(2026, 6, $ids),
             'summarize' => fn () => $summaries->summarize(2026, 5, $ids),
             'summarizeRange' => fn () => $summaries->summarizeRange($range, $ids),
+            // Category retrieval and account breakdown (central since the tenant-filter audit).
+            // Balances cover a stored snapshot (June), carry-forward from earlier snapshots plus
+            // journals (July) and a month before any activity (March).
+            'categoryTree' => fn () => $consolidated->categoryTree($ids),
+            'categoryTree balances June' => fn () => $consolidated->categoryTree($ids, 2026, 6, true),
+            'categoryTree balances July' => fn () => $consolidated->categoryTree($ids, 2026, 7, true),
+            'categoryTree balances March' => fn () => $consolidated->categoryTree($ids, 2026, 3, true),
+            'category index' => fn () => json_decode(json_encode(app(AccountCategoryTreeService::class)
+                ->index(['with' => 'children,accounts,balance', 'year' => 2026, 'month' => 7], $ids)), true),
+            'category index filters' => fn () => json_decode(json_encode(app(AccountCategoryTreeService::class)
+                ->index(['tenant_ids' => $ids, 'search' => 'cash', 'with' => 'accounts,balance', 'year' => 2026, 'month' => 8, 'per_page' => 2])), true),
+            'accountBreakdown' => fn () => app(GeneralLedgerService::class)->getAccountBreakdown('1001', '2026-04-01', '2026-08-31', $ids),
+            'accountBreakdown revenue' => fn () => app(GeneralLedgerService::class)->getAccountBreakdown('4001', '2026-05-01', '2026-06-30', $ids),
         ];
     }
 
@@ -63,6 +78,10 @@ class CentralReportingParityTest extends TestCase
             $live['balanceSheetSummary June']['summary']['snapshots']);
         $this->assertSame('current', $live['balanceSheetSummary April']['summary']['status']);
         $this->assertNotEquals(0.0, $live['consolidated profitLossRange']['report']['net_income']);
+        $this->assertSame(['tenant-a', 'tenant-b'], array_column($live['accountBreakdown']['tenants'], 'tenant_id'), 'per-tenant rows');
+        $this->assertNotEquals(0.0, $live['accountBreakdown']['totals']['total_debit']);
+        $balances = fn (array $nodes) => collect($nodes)->flatMap(fn ($node) => collect($node['accounts'])->pluck('balance'))->filter()->count();
+        $this->assertGreaterThan(0, $balances($live['categoryTree balances July']['data'][0]['children'][0]['children']));
 
         $this->useCentral();
         $this->disconnectTenants();
@@ -181,6 +200,12 @@ class CentralReportingParityTest extends TestCase
 
         // An unregistered tenant rejects the entire request; nothing partial is returned.
         $this->assertRejected(fn () => $service->balanceSheet(2026, 5, ['tenant-a', 'tenant-c']), 'Tenant [tenant-c] central reporting is not ready: not registered');
+        // Category retrieval and account breakdown enforce the same readiness; no live fallback.
+        $this->tenancy->initializations = [];
+        $this->assertRejected(fn () => $service->categoryTree(['tenant-a', 'tenant-c'], 2026, 5, true), 'Tenant [tenant-c] central reporting is not ready');
+        $this->assertRejected(fn () => app(AccountCategoryTreeService::class)->index(['tenant_ids' => ['tenant-a', 'tenant-c']]), 'Tenant [tenant-c] central reporting is not ready');
+        $this->assertRejected(fn () => app(GeneralLedgerService::class)->getAccountBreakdown('1001', '2026-04-01', '2026-05-31', ['tenant-c']), 'Tenant [tenant-c] central reporting is not ready');
+        $this->assertSame([], $this->tenancy->initializations);
 
         // Freshness limit.
         $this->travel(901)->seconds();

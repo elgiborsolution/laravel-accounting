@@ -201,14 +201,20 @@ Journals, posting, reversals, fiscal periods and closing remain tenant-local and
 **Reads:**
 - `TenantReportRunner::runReports()` dispatches by `read_source`. `resolveTenants()` is extracted from `run()` with unchanged validation and error order.
 - `src/Support/CentralReportContext.php` (provider singleton) validates the configuration, then the readiness of all selected tenants. It runs the same report callbacks inside one central transaction and never initializes tenancy.
-- `ReportService` and `ConsolidatedReportService` read snapshots, fiscal periods, snapshot counts, the earliest posted date, legacy-sign rows and posted-movement queries through loaders that prefer the active central context. Master data comes from the unchanged `AccountCategoryRepository` / `AccountRepository` / `ServiceRepository` / `Account` calls. Calculations, payloads and stable-code checks are unchanged.
-- Central mode covers the tenant-list paths of `ReportService::profitLoss|balanceSheet|profitLossRange|profitLossDetail`, the in-scope `ConsolidatedReportService` methods and `ProfitLossSummaryService` (and therefore the `tenant_ids` HTTP report endpoints).
-- `categoryTree()`, general ledger, calls without a tenant list, and all closing operations stay live.
+- `ReportService`, `ConsolidatedReportService`, `AccountBalanceService` (snapshot query, journal totals, earliest journal date) and `GeneralLedgerService::accountActivityTotals()` read snapshots, fiscal periods, snapshot counts, the earliest posted/journal date, legacy-sign rows and posted-movement queries through loaders that prefer the active central context. Master data comes from the unchanged `AccountCategoryRepository` / `AccountRepository` / `ServiceRepository` / `Account` calls. Calculations, payloads and stable-code checks are unchanged.
+- Central mode covers every tenant-filtered report path (audited 2026-11-06):
+  - `ReportService::profitLoss|balanceSheet|profitLossRange|profitLossDetail`;
+  - every tenant-list `ConsolidatedReportService` method, including `categoryTree()`; its tenant id comes from `CentralReportContext::tenantId()` before the tenancy-based `categoryTenantIdentifier()`;
+  - `AccountCategoryTreeService::index()` with tenant lists;
+  - `GeneralLedgerService::getAccountBreakdown()`;
+  - `ProfitLossSummaryService`, and therefore the `tenant_ids` HTTP report endpoints.
+- No fallback: an unsupported setup, missing tables or an unready tenant reject the call.
+- Live in both modes: calls without a tenant list, methods with no tenant filter (`ReportService::generalLedger|trialBalance|cashFlow`, `GeneralLedgerService` ledger/detail) and all closing operations.
 - A selected tenant that is unregistered, not backfilled, failed, drifted or older than `reporting.max_lag_seconds` rejects the whole request under `reporting_sync`.
 
-**Tests** (local suite on PHP 8.4.20: 427 tests, 3097 assertions, all passing). They use SQLite and a host-tenancy double; deployed tenancy, other drivers and real concurrent processes are unverified.
+**Tests** (local suite on PHP 8.4.20: 427 tests, 3115 assertions, all passing). They use SQLite and a host-tenancy double; deployed tenancy, other drivers and real concurrent processes are unverified.
 - `tests/Feature/CentralReportingParityTest.php`:
-  - 21 PHP entry points plus HTTP, identical live versus central with tenant databases disconnected and no tenancy initialization;
+  - 29 PHP entry points plus HTTP, identical live versus central with tenant databases disconnected and no tenancy initialization. These include category tree/index balances (snapshot, carry-forward, pre-activity months) and account breakdowns. Each fix was mutation-checked: reverting it fails this test;
   - master tables read directly, central ids in the copies, master edits visible without sync;
   - unsupported configurations: tenant-local master data and missing master tables skip the migration and are rejected by sync, commands and reads; missing central tables are reported with instructions;
   - every readiness rejection reason;
