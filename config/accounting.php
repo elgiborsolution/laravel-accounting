@@ -125,6 +125,16 @@ return [
         // tenant transaction DB. Participating tenants come from the tenantIds argument of the first
         // shared close and are persisted centrally for later calls.
         'cutoff_mode' => env('ACCOUNTING_CLOSING_CUTOFF_MODE', 'per_tenant'),
+
+        // Global monthly closing (ClosingService::closeMonthGlobally(), accounting:closing-close-month).
+        // Tracking tables live on master_data.connection; one queued job closes each tenant.
+        // queue_connection/queue: null uses the host defaults. lease_seconds: how long a worker's claim
+        // on a tenant/period lasts before a crashed or stuck attempt may be recovered (minimum 60).
+        'global' => [
+            'queue_connection' => env('ACCOUNTING_CLOSING_QUEUE_CONNECTION'),
+            'queue' => env('ACCOUNTING_CLOSING_QUEUE'),
+            'lease_seconds' => env('ACCOUNTING_CLOSING_LEASE_SECONDS', 900),
+        ],
     ],
 
     /*

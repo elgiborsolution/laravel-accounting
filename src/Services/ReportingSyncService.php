@@ -8,6 +8,7 @@ use ESolution\LaravelAccounting\Models\JournalEntryDetail;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\CentralReportingRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\AccountingErrorReporter;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\ReportingChangeLog;
 use ESolution\LaravelAccounting\Support\ReportingDigest;
@@ -135,7 +136,7 @@ class ReportingSyncService
                 'last_success_at' => $source->last_success_at ?? null,
                 'failures' => (int) ($source->failures ?? 0),
                 'next_attempt_at' => $source->next_attempt_at ?? null,
-                'last_error' => $source->last_error ?? null,
+                'last_error' => AccountingErrorReporter::sanitize($source->last_error ?? null),
                 'cutoff_date' => $source->cutoff_date ?? null,
                 'locked' => $source !== null && $source->lock_owner !== null && $source->lock_expires_at >= $now->toDateTimeString(),
             ];
@@ -153,9 +154,9 @@ class ReportingSyncService
                 return ['tenant_id' => $tenantId, 'result' => 'locked'];
             }
         } catch (Throwable $e) {
-            report($e);
+            $reference = AccountingErrorReporter::report($e, 'Central reporting '.$operation.' failed', ['tenant_id' => $tenantId]);
 
-            return ['tenant_id' => $tenantId, 'result' => 'failed', 'error' => $e->getMessage()];
+            return ['tenant_id' => $tenantId, 'result' => 'failed', 'error' => $this->readableFailure($e, $reference)];
         }
 
         try {
@@ -167,16 +168,17 @@ class ReportingSyncService
 
             return ['tenant_id' => $tenantId, 'result' => 'ok'] + $output;
         } catch (Throwable $e) {
+            // Full details (SQL, trace) go to the log under a reference; stored and returned text stays readable.
+            $reference = AccountingErrorReporter::report($e, 'Central reporting '.$operation.' failed', ['tenant_id' => $tenantId]);
             if ($recordFailure) {
                 try {
-                    $this->central->recordFailure($tenantId, $operation, $e);
+                    $this->central->recordFailure($tenantId, $operation, $e, $reference);
                 } catch (Throwable $ignored) {
                     report($ignored);
                 }
             }
-            report($e);
 
-            return ['tenant_id' => $tenantId, 'result' => 'failed', 'error' => $e->getMessage()];
+            return ['tenant_id' => $tenantId, 'result' => 'failed', 'error' => $this->readableFailure($e, $reference)];
         } finally {
             try {
                 $this->central->releaseLock($tenantId, $token);
@@ -184,6 +186,11 @@ class ReportingSyncService
                 // An unreleased lease expires after accounting.reporting.lock_seconds.
             }
         }
+    }
+
+    protected function readableFailure(Throwable $e, string $reference): string
+    {
+        return AccountingErrorReporter::safeMessage($e).' ('.trans('accounting::reporting.reference', ['reference' => $reference]).')';
     }
 
     protected function syncTenant(string $tenantId, string $token, ?int $maxBatches): array

@@ -113,7 +113,22 @@ class TenantReportRunner
         ])->validate();
     }
 
-    protected function resolveValidatedTenants(array $tenantIds): array
+    /**
+     * Every tenant of the configured tenancy model, as canonical (primary key) ids ordered by key,
+     * without initializing tenancy.
+     *
+     * @return list<string>
+     */
+    public function allTenantIds(): array
+    {
+        $tenantModel = $this->tenantModel();
+        $key = (new $tenantModel)->getKeyName();
+
+        return $tenantModel::query()->orderBy($key)->pluck($key)->map(fn ($id) => (string) $id)->values()->all();
+    }
+
+    /** @return class-string<Model> */
+    protected function tenantModel(): string
     {
         $tenantModel = config('tenancy.tenant_model');
 
@@ -122,6 +137,13 @@ class TenantReportRunner
                 'tenant_ids' => ['Tenant reports require a valid tenancy.tenant_model configuration.'],
             ]);
         }
+
+        return $tenantModel;
+    }
+
+    protected function resolveValidatedTenants(array $tenantIds): array
+    {
+        $tenantModel = $this->tenantModel();
 
         $tenants = [];
         $errors = [];

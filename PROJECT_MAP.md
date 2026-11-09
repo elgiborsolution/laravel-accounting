@@ -232,6 +232,57 @@ Journals, posting, reversals, fiscal periods and closing remain tenant-local and
   - unified-folder migration ownership (tenant runs and rollbacks, idempotent central re-runs, no master connection), prune and commands.
 - Shared fixture: `tests/Feature/Concerns/`.
 
+## Scoped update: global monthly closing (2026-11-09)
+
+Existing closing methods, signatures and return values are unchanged. Usage, statuses, codes and scheduling are in `docs/reference.md` (section "Global monthly closing").
+
+**Entry points (verified in source and tests).**
+- `ClosingService` (`src/Services/ClosingService.php`) adds `closeMonthGlobally()`, `getGlobalCloseRun()`, `retryGlobalCloseRun()`, `recoverGlobalCloseRuns()`, `processGlobalCloseTenant()` and `defaultGlobalCloseMonth()`. No new service was added.
+- Queued job `src/Jobs/CloseTenantMonthJob.php` is the package's first job. It holds only the tracking item id and calls `processGlobalCloseTenant()`.
+- Command `accounting:closing-close-month` (`src/Console/Commands/ClosingCloseMonthCommand.php`), registered in console. The host owns the schedule and the queue worker.
+- Persistence lives in `src/Repositories/ClosingRunRepository.php`, a provider singleton.
+
+**Database ownership.**
+- `database/migrations/accounting/2026_11_09_000020_create_acc_closing_runs_tables.php` creates prefixed `closing_runs`, `closing_run_tenants` (unique per run and tenant) and `closing_run_locks` (primary key tenant, year, month).
+- They live only on `master_data.connection`, through `HandlesCentralMigration`, whether or not `use_shared_database` is set. Tenant runs create nothing.
+- Fiscal periods, snapshots and outbox rows remain tenant-local and are written by the unchanged `closeMonth()`.
+
+**Tenant behavior.**
+- Null or `[]` selects every tenant of `tenancy.tenant_model` via the new `TenantReportRunner::allTenantIds()`. Explicit lists go through `resolveTenants()` (aliases deduplicated) before the run is saved.
+- Each tenant runs inside `TenantReportRunner::run([$id])`, which restores the previous tenant and default connection.
+- Single-database installs without a tenancy model cannot use this feature.
+
+**Flow.**
+- Tracking rows commit in one master transaction. Jobs are queued with `afterCommit()`.
+- A claim is a conditional update on the item plus a tenant/period lease shared by all runs. Expired leases (`closing.global.lease_seconds`, default 900) can be taken over. Outcome writes are fenced by the claim token.
+- Each attempt rechecks the fiscal period: `already_closed`, `not_due` (closing day), or for scheduled runs `not_due`/`reopened_period` when snapshots are retained or an earlier run closed it. Otherwise it calls `closeMonth()`.
+- Failures are mapped to readable codes and reported through the host exception handler as `Exceptions/ReferencedAccountingException` (original as previous, `reference` in context). Messages are localized from `lang/{en,id}/closing.php`, loaded with namespace `accounting`. The new `accounting-lang` publish tag exposes them.
+- Scheduled runs: one per period. Later scheduled calls resume it rather than starting a new run.
+- Shared cutoff state and scope are never changed by a global close.
+
+**Supporting changes.**
+- `closeMonthlyPeriod()` now throws `Exceptions/ClosingPeriodException` (a subclass of `Exception`; messages unchanged) with a `reason`.
+- The posted-totals query and the latest-due-month loop were extracted into `postedMonthTotals()` / `latestDueMonth()` with identical behavior.
+
+**Reporting sanitization.**
+- `ReportingSyncService::runTenant()` reports failures through `Support/AccountingErrorReporter` (reference ID).
+- `CentralReportingRepository::recordFailure()` gained an optional `$reference` and stores readable text. Database failures become `a database error occurred (SQLSTATE x)`; other messages are unchanged.
+- `readiness()` / `status()` also sanitize legacy stored `last_error` values containing SQL. Before this, `assertReady()` validation messages exposed raw SQL to central-mode report callers.
+
+**Tests.** `tests/Feature/GlobalMonthlyClosingTest.php` (14 tests, SQLite) covers:
+- both master modes, default/explicit/alias tenant selection, and progress flags mid-close;
+- a foreign-key partial failure with log reference and retry of failed tenants only;
+- unbalanced and unavailable tenants, with context restoration;
+- duplicate jobs, held leases across runs, crash recovery, a committed-but-unrecorded close, and fencing;
+- dispatch after commit and caller rollback;
+- scheduled reopen protection and resume, `not_due` in `en` and `id`;
+- shared-cutoff preservation, migration ownership, the command, and reporting sanitization.
+
+**Unverified.**
+- Concurrent workers on production drivers.
+- Real queue backends other than `sync`/fake.
+- Host tenancy bootstrappers in queued jobs.
+
 ## Evidence and scope
 
 - **Verified from source:** Composer metadata, all package PHP classes, routes, configuration, migrations, seeder implementations and representative localized data, hook stubs, and test definitions were inspected. Existing documentation was checked against source.
@@ -287,6 +338,7 @@ All keys are in `config/accounting.php`.
 | `closing.closing_day_month` | `env('ACCOUNTING_CLOSING_DAY_MONTH', 'next')` | Month the closing day belongs to: `current` or `next` |
 | `closing.cutoff_enabled` | `env('ACCOUNTING_CLOSING_CUTOFF_ENABLED', false)` | Enables persisted inclusive date cutoffs |
 | `closing.cutoff_mode` | `env('ACCOUNTING_CLOSING_CUTOFF_MODE', 'per_tenant')` | `per_tenant` (transaction DB) or `shared` (on `master_data.connection`) cutoff storage |
+| `closing.global.*` | `queue_connection` / `queue` null (host defaults), `lease_seconds` 900 | Global monthly closing job routing and claim lease (2026-11-09) |
 | `reporting.*` | `read_source` `live`, `change_log_enabled` false, `max_lag_seconds` 900, `batch_size` 500, `lock_seconds` 600, `retry_base_seconds` 60, `retry_max_seconds` 3600, `prune_after_days` 7 | Central reporting outbox, sync and read source (2026-11-06 scoped update) |
 | `route.prefix` | `api/accounting` | Route group and exception-responder request matching |
 | `route.middleware` | `['api']` | Host-configurable route middleware; exception middleware is always appended and deduplicated |
@@ -352,7 +404,7 @@ These public methods are integration surfaces even when no route exposes them. C
 | `MappingService` | `findByKey(string)` returns first active matching mapping; `getByService($serviceId)` returns active ordered mappings |
 | `ServiceManagementService` | `create(array, ?Request = null): Service`, `update(Service, array, ?Request = null): Service`; active mappings attached; hooks also execute on direct calls |
 | `FiscalPeriodService` | `ensureForDate($date): FiscalPeriod`, `ensureForJournalDate($date): FiscalPeriod`, `ensureThroughCurrentMonth(?Carbon = null): Collection` |
-| `ClosingService` | `closeMonth($year, $month, $userId = null)`, `closeThroughCurrentMonth($userId = null)`, alias `closeUntilCurrentMonth($userId = null)`, `reopenMonth($year, $month, $userId = null)` |
+| `ClosingService` | `closeMonth($year, $month, $userId = null)`, `closeThroughCurrentMonth($userId = null)`, alias `closeUntilCurrentMonth($userId = null)`, `reopenMonth($year, $month, $userId = null)`; global monthly closing (2026-11-09): `closeMonthGlobally(int $year, int $month, ?array $tenantIds = null, int\|string\|null $actorId = null, bool $scheduled = false)`, `getGlobalCloseRun(int $runId)`, `retryGlobalCloseRun(int $runId, ?array $tenantIds = null)`, `recoverGlobalCloseRuns()`, `processGlobalCloseTenant(int $itemId)`, `defaultGlobalCloseMonth()` |
 | `GeneralLedgerService` | `getLedger(string, int, int): array`; `getLedgerDetails(string $accountId, int $year, int $month, string\|int\|null $tenant = null, ?int $page = null, ?int $perPage = null): GeneralLedgerPaginator`; `getDetails(string, string, string, float, bool): array` |
 | `ReportService` | `generalLedger($accountId, $startDate, $endDate)` returns account/path and opening balance only; `trialBalance($year, $month)`, `cashFlow(...)` return report arrays; `profitLoss($year, $month, ?array $tenantIds = null)` and `balanceSheet(...)` additionally support separate per-tenant payloads through `TenantReportRunner`; `profitLossDetail($year, $month, ?array $tenantIds = null)` returns `{prior_months_profit_loss, current_month_profit_loss}` (runner rows with tenant IDs) and `profitLossDetailMarkers()` returns validated closing markers |
 | `ConsolidatedReportService` | `profitLoss($year, $month, array $tenantIds): array`, `balanceSheet(...)`: canonical tenant IDs, year/month and one arithmetic report; `profitLossSummary(...)`: same required arguments and `{tenant_ids, period, summary}` with nine components and four profit values; `profitLossSummaryByTenant($year, $month, array $tenantIds): array` / `profitLossSummaryRangeByTenant(array $range, array $tenantIds): array`: compact, separate tenant rows with four calculated profits; `categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array`: full merged chart and source UUID/code aliases for service retrieval; `balanceSheetSummary($year, $month, array $tenantIds)` / `balanceSheetSummaryByTenant(...)` / `balanceSheetSummaryByMonth(array $range, array $tenantIds)`: month-end asset/liability/equity totals, current assets/liabilities, `current_ratio`, `debt_ratio`, journal-based `current_year_profit_loss` and `balance_sheet_difference`, plus `current_year_period`, with `current`/`stale`/`missing` snapshot status and null snapshot metrics when unusable; `balanceSheetProfitDetail(...)` / `balanceSheetProfitDetailByTenant(...)` / `balanceSheetProfitDetailByMonth(...)`: informational `prior_months_profit_loss` / `current_month_profit_loss` excluding opening and closing-transfer journals |
@@ -435,6 +487,7 @@ Additional package migrations, in filename order:
 | `2026_11_04_000017_create_shared_closing_cutoffs_tables.php` | Master connection only (`HandlesCentralMigration`); shared cutoff state and audit; guarded |
 | `2026_11_06_000018_create_acc_reporting_change_log_table.php` | Transaction; reporting outbox; guarded |
 | `2026_11_06_000019_create_acc_reporting_central_tables.php` | Master connection only (`HandlesCentralMigration`) and supported configuration; central reporting tables; guarded |
+| `2026_11_09_000020_create_acc_closing_runs_tables.php` | Master connection only (`HandlesCentralMigration`); global monthly-closing runs, per-tenant items and tenant/period leases; guarded |
 
 Master migrations use `HandlesMasterConnection::schema()` and skip existing master tables. Static risk (pre-existing, unchanged): their `down()` targets the master connection from any run, so a tenant rollback in shared-master mode would drop master tables. The 2026-11-06 central migrations (`HandlesCentralMigration`) do not share this risk. Transaction migrations use default `Schema`; their initial table creation and reversal migration are not equivalently guarded. Filename timestamps determine ordering; numeric suffix `000013` is reused on different dates.
 
@@ -545,7 +598,7 @@ Source: `src/Contracts/BeforeApiHook.php`, `AfterApiHook.php`, `src/Support/Acco
 - Service create/update invokes the hook manager itself, including direct PHP calls; controllers avoid double wrapping those two actions. Other direct services, including journal, CoA, closing, opening-balance service, and reports, have no automatic hook lifecycle.
 - After hooks run after the business handler returns; journal/service transactions have already committed. There is no failure hook, hook chain, transaction-wide wrapper, or queued hook execution. After-hook failure can therefore report failure after persistence and before controller cache invalidation.
 - `src/Contracts/AccountingHook.php` and `src/Support/NullAccountingHook.php` implement an older beforeHandle/afterHandle contract; the current manager does not reference them. Hook stubs are examples to copy into the host; provider does not publish/register them.
-- No custom domain events or jobs are defined. Eloquent callbacks in `HasUuid` and `JournalEntry::booted()` are the active model lifecycle logic; since 2026-11-06 the provider also registers `ReportingChangeLog` model listeners (journals, details, fiscal periods), which only write outbox rows when `reporting.change_log_enabled` is true and master data is shared.
+- No custom domain events are defined. The only job is `Jobs/CloseTenantMonthJob` (global monthly closing, 2026-11-09). Eloquent callbacks in `HasUuid` and `JournalEntry::booted()` are the active model lifecycle logic; since 2026-11-06 the provider also registers `ReportingChangeLog` model listeners (journals, details, fiscal periods), which only write outbox rows when `reporting.change_log_enabled` is true and master data is shared.
 
 ### Cache behavior
 

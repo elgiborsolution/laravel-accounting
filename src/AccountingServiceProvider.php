@@ -31,7 +31,9 @@ use ESolution\LaravelAccounting\Support\TenantReportRunner;
 use ESolution\LaravelAccounting\Support\ProfitLossSummaryCalculator;
 use ESolution\LaravelAccounting\Http\Middleware\HandleAccountingApiExceptions;
 use ESolution\LaravelAccounting\Services\ServiceManagementService;
+use ESolution\LaravelAccounting\Console\Commands\ClosingCloseMonthCommand;
 use ESolution\LaravelAccounting\Console\Commands\ReportingBackfillCommand;
+use ESolution\LaravelAccounting\Repositories\ClosingRunRepository;
 use ESolution\LaravelAccounting\Console\Commands\ReportingPruneCommand;
 use ESolution\LaravelAccounting\Console\Commands\ReportingReconcileCommand;
 use ESolution\LaravelAccounting\Console\Commands\ReportingStatusCommand;
@@ -157,6 +159,13 @@ class AccountingServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(ClosingRunRepository::class, function ($app) {
+            return new ClosingRunRepository(
+                $app->make(AccountingConnectionResolver::class),
+                $app->make(AccountingTableResolver::class)
+            );
+        });
+
         $this->app->singleton(FiscalPeriodService::class, function ($app) {
             return new FiscalPeriodService($app->make(FiscalPeriodRepository::class));
         });
@@ -226,6 +235,9 @@ class AccountingServiceProvider extends ServiceProvider
         // Load routes
         $this->loadRoutesFrom(__DIR__.'/../routes/api.php');
 
+        // Readable closing/reporting messages: trans('accounting::closing.*'), 'accounting::reporting.*'.
+        $this->loadTranslationsFrom(__DIR__.'/../lang', 'accounting');
+
         // Load migrations
         if ($this->app->runningInConsole()) {
             $this->loadMigrationsFrom(__DIR__.'/../database/migrations/accounting');
@@ -242,8 +254,13 @@ class AccountingServiceProvider extends ServiceProvider
                 __DIR__.'/../database/migrations/accounting/' => database_path('migrations/accounting'),
             ], 'accounting-migrations');
 
+            $this->publishes([
+                __DIR__.'/../lang' => $this->app->langPath('vendor/accounting'),
+            ], 'accounting-lang');
+
             // The host registers the schedule for these commands.
             $this->commands([
+                ClosingCloseMonthCommand::class,
                 ReportingBackfillCommand::class,
                 ReportingSyncCommand::class,
                 ReportingReconcileCommand::class,

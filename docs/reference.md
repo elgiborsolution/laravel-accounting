@@ -323,8 +323,14 @@ Dependencies: `AccountCategoryRepository`, `AccountingTableResolver`, `FiscalPer
 | `reopenCutoff(?string $cutoffDate, string $reason, int\|string\|null $userId = null, ?array $tenantIds = null): array` | Earlier retained cutoff, or null; nonblank reason required; actor/scope optional | `array` | Reopens local cutoffs independently or one shared cutoff. Shared reopening validates monthly locks in every participant before changing central state. |
 | `getCutoffDate(): ?string` | None | `string\|null` | Reads the saved local or authoritative shared cutoff; null means no active cutoff or disabled protection. |
 | `getCutoffHistory(): Collection` | None; cutoff feature must be enabled | `Collection<object>` | Returns audit events in increasing event-ID order, including prior dates, new dates, actor, reason, action and timestamp. |
+| `closeMonthGlobally(int $year, int $month, ?array $tenantIds = null, int\|string\|null $actorId = null, bool $scheduled = false): array` | Year/month required; null or `[]` tenants means every tenant of `tenancy.tenant_model`; actor (max 100 chars); scheduler flag | Run array | Records a tracked run on the master connection and queues one job per tenant after commit. See [Global monthly closing](#global-monthly-closing). |
+| `getGlobalCloseRun(int $runId): array` | Run id | Run array | Progress and per-tenant results with localized readable messages. |
+| `retryGlobalCloseRun(int $runId, ?array $tenantIds = null): array` | Run id; optional subset of the run's tenants (ids or route keys) | Run array | Requeues failed tenants and tenants whose claim expired. Other tenants are untouched. |
+| `recoverGlobalCloseRuns(): array` | None | `list<{run_id, dispatched}>` | Crash recovery: requeues stale processing tenants and pending tenants whose job never ran within one lease, for every unfinished run. |
+| `processGlobalCloseTenant(int $itemId): array` | Tracking item id | `{item_id, claimed, status?, reason?}` | Queue-worker entry point used by `CloseTenantMonthJob`; hosts normally do not call it. |
+| `defaultGlobalCloseMonth(): array` | None | `{year, month}` | Latest month whose `closing_day` has arrived, or the previous calendar month when `closing_day` is null. Used by the command's default period. |
 
-Rules: closing rejects already-closed periods and unbalanced posted journals; ending balances use category normal balance and the prior month's ending balance. Reopening is blocked while subsequent periods are still closed. Queries use the resolved transaction connection and resolved tables.
+Rules: closing rejects already-closed periods and unbalanced posted journals (as `ClosingPeriodException`, a subclass of `Exception` with the same messages and a `reason` of `not_found`, `already_closed` or `unbalanced`); ending balances use category normal balance and the prior month's ending balance. Reopening is blocked while subsequent periods are still closed. Queries use the resolved transaction connection and resolved tables.
 
 Cutoff configuration and persistence:
 
@@ -453,6 +459,128 @@ $closing->reopenCutoff('2026-11-10', 'Correct November 11 onward', 12);
 ```
 
 Shared events use the same fields shown above plus `"tenant_ids": ["branch-a", "branch-b"]`. They are returned once, not per tenant. Histories are read centrally in increasing event-ID order; local histories remain in their original databases.
+
+#### Global monthly closing
+
+`closeMonthGlobally()` closes one calendar month in many tenants and keeps going when some fail. Each tenant runs the existing `closeMonth()`, so its eligibility (`closing_day`), balance check, transaction, shared closing lock, snapshots and reporting outbox row are unchanged. It is a separate operation from a shared cutoff:
+
+| | Shared cutoff (`closeThroughDate()` in `shared` mode) | Global monthly close (`closeMonthGlobally()`) |
+| --- | --- | --- |
+| What it changes | One central date lock plus every complete month up to it | One month's fiscal period and snapshots in each tenant |
+| Tenants | Fixed saved scope; must match exactly | Every tenant, or any explicit list |
+| On failure | Stops; central date is not published | Records the failure and continues with the other tenants |
+| Retry | Repeat the call; closed months are skipped | `retryGlobalCloseRun()` retries failed tenants only |
+| Audit | Cutoff event history | Run and per-tenant tracking rows |
+
+A global close never publishes, advances or changes a shared cutoff or its scope, in any mode. Use `closeThroughDate()` for that.
+
+**Setup.** Requires `accounting.master_data.connection` (`ACCOUNTING_MASTER_CONNECTION`) to name a configured connection, with or without `use_shared_database`, and a configured `tenancy.tenant_model`. Run `2026_11_09_000020_create_acc_closing_runs_tables` against that connection (`php artisan migrate --database=<master>`). Like the shared cutoff migration, it does nothing on tenant runs. Without the tables, the methods throw a `RuntimeException` naming the connection. Run a queue worker for `accounting.closing.global.queue_connection` / `queue` (null uses the host defaults). With the `sync` driver, jobs run inline and the returned run is already complete.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `closing.global.queue_connection` | `env('ACCOUNTING_CLOSING_QUEUE_CONNECTION')` (null) | Queue connection for `CloseTenantMonthJob` |
+| `closing.global.queue` | `env('ACCOUNTING_CLOSING_QUEUE')` (null) | Queue name |
+| `closing.global.lease_seconds` | `env('ACCOUNTING_CLOSING_LEASE_SECONDS', 900)` (minimum 60) | How long a worker's claim lasts before a crashed attempt can be recovered. Set it above your longest single-tenant close. |
+
+**Flow.**
+
+1. Validates year, month and actor, plus the closing settings. Resolves tenants: null or `[]` means every tenant of `tenancy.tenant_model`. An explicit list accepts primary or route keys, which are deduplicated to canonical ids before anything is saved. Unknown tenants fail validation and no run is created.
+2. Inserts the run (`pending`) and one `pending` row per tenant in one master transaction.
+3. Queues `CloseTenantMonthJob` per tenant with `afterCommit()`. Inside a caller's transaction, jobs are queued only when it commits. If the caller rolls back, the tracking rows remain `pending` and `recoverGlobalCloseRuns()` picks them up after one lease.
+4. Each job claims its row and a lease on the tenant and period, shared by every run. It then initializes the tenant through `TenantReportRunner`, which always restores the previous tenant and default connection. Each attempt rechecks the period:
+   - already closed → `already_closed`;
+   - before its `closing_day` → `not_due`;
+   - scheduled run on a reopened period → `not_due` with code `reopened_period`;
+   - otherwise `closeMonth()` → `closed`.
+
+   Posted debit/credit totals for the month are stored when the tenant could be read. Any exception becomes `failed` with a readable code. The run's counts and status are recomputed after every tenant.
+
+**Statuses.** Run: `pending`, `processing`, `completed` (no failures; `not_due` counts as finished), `partially_failed`, `failed` (every tenant failed). Tenant: `pending`, `processing`, `closed`, `already_closed`, `not_due`, `failed`.
+
+**Overlap, duplicates and crashes.**
+
+- A tenant and period is processed by at most one worker at a time, across runs (`acc_closing_run_locks`). A busy job is released for 60 seconds.
+- Duplicate or late jobs find their row already finished and return `claimed: false`.
+- A worker that dies leaves its row `processing`. `getGlobalCloseRun()` shows `stale: true` once the lease expires, and `recoverGlobalCloseRuns()` or `retryGlobalCloseRun()` requeues it.
+- Outcomes are written only while the worker still owns its claim, so a slow worker cannot overwrite a newer attempt.
+- If a crashed worker had already committed the tenant close, the next attempt reports `already_closed`.
+- `attempts` counts every claim.
+
+**Scheduled runs.** With `$scheduled = true`, a period has at most one scheduled run. Later scheduled calls for the same period return that run, requeuing stale or never-run tenants, instead of starting another. Scheduled runs never close a period that was closed before and then reopened. They detect this from retained snapshots or from an earlier run's `closed` row, and report `not_due` with code `reopened_period`. Close such periods with a manual run or `closeMonth()` once corrections are done. Tenants added after the scheduled run was created are not included; start a manual run for them.
+
+**Results.** Every run method returns:
+
+```json
+{
+  "id": 1, "year": 2026, "month": 7, "period": "2026-07", "trigger": "manual", "status": "partially_failed",
+  "actor_id": "closer", "tenant_ids": ["tenant-a", "tenant-b"],
+  "counts": {"total": 2, "pending": 0, "processing": 0, "closed": 1, "already_closed": 0, "not_due": 0, "failed": 1},
+  "created_at": "2026-08-20 12:00:00", "started_at": "2026-08-20 12:00:00", "finished_at": "2026-08-20 12:00:01",
+  "tenants": [
+    {"tenant_id": "tenant-a", "status": "closed", "attempts": 1, "total_debit": 100.0, "total_credit": 100.0,
+     "started_at": "…", "finished_at": "…", "stale": false, "error": null, "reason": null},
+    {"tenant_id": "tenant-b", "status": "failed", "attempts": 1, "total_debit": 40.0, "total_credit": 40.0,
+     "started_at": "…", "finished_at": "…", "stale": false, "reason": null,
+     "error": {"code": "account_reference_mismatch",
+               "message": "Account balances for July 2026 could not be saved because the accounts in this company's database do not match the chart of accounts.",
+               "action": "Ask an administrator to check the accounting master-data setting and migrations, then retry. Reference: 5f0c….",
+               "reference": "5f0c…"}}
+  ]
+}
+```
+
+`error` (failed tenants) and `reason` (`not_due` tenants) carry `code`, `message`, `action` and `reference`. They are rendered when read, in the application locale, from `lang/{en,id}/closing.php` (publish tag `accounting-lang`). They never contain SQL, table names or stack traces. The full exception is reported through the host exception handler as the previous exception of `ReferencedAccountingException`. Its log context holds the same `reference` plus `closing_run_id`, `closing_run_tenant_id`, `tenant_id`, `period` and `error_code`.
+
+| Code | Cause |
+| --- | --- |
+| `not_due` | Before the configured closing day (`:date` is the due date) |
+| `reopened_period` | Scheduled run skipped a deliberately reopened period |
+| `unbalanced_journals` | Posted debits differ from credits (amounts included) |
+| `account_reference_mismatch` | Foreign-key violation writing snapshots, typically a tenant database migrated while master data was tenant-local whose snapshot table still references its own `acc_accounts` after `use_shared_database` was enabled |
+| `database_error` | Any other database failure |
+| `tenant_unavailable` | The tenant could not be resolved or initialized |
+| `configuration_error` | Invalid closing settings detected while closing |
+| `unexpected_error` | Anything else |
+
+**Command and scheduling.** `accounting:closing-close-month` wraps these methods. It exits 1 when any tenant failed or the input is invalid.
+
+| Option | Effect |
+| --- | --- |
+| `--year= --month=` | Period to close; both or neither (neither = `defaultGlobalCloseMonth()`) |
+| `--tenant=*` | Tenant ids or route keys; omit for every tenant |
+| `--actor=` | Actor recorded on the run and as `closed_by` (use a value compatible with that column) |
+| `--scheduled` | Scheduler mode described above |
+| `--recover` | Run `recoverGlobalCloseRuns()` first; alone, only recovers |
+| `--retry=ID` / `--status=ID` | Retry failed tenants of a run / print a run |
+
+The package registers no schedule. Example host schedule:
+
+```php
+use Illuminate\Support\Facades\Schedule;
+
+// Close the latest due month once it is due; later ticks only resume that period's scheduled run,
+// so periods reopened for corrections are not closed again automatically.
+Schedule::command('accounting:closing-close-month --scheduled --recover')
+    ->dailyAt('01:30')->withoutOverlapping()->onOneServer();
+
+// Optional: recover crashed workers more often than the daily close.
+Schedule::command('accounting:closing-close-month --recover')->everyFifteenMinutes()->withoutOverlapping();
+```
+
+PHP usage:
+
+```php
+$closing = app(\ESolution\LaravelAccounting\Services\ClosingService::class);
+$run = $closing->closeMonthGlobally(2026, 7, null, auth()->id());     // every tenant
+$run = $closing->closeMonthGlobally(2026, 7, ['branch-a', 'branch-b']); // selected tenants
+$progress = $closing->getGlobalCloseRun($run['id']);
+$retried = $closing->retryGlobalCloseRun($run['id']);                   // failed tenants only
+```
+
+Limits:
+
+- Each run closes exactly one month. It does not require the previous month to be closed: `closeMonth()` carries forward whatever snapshots the previous month has, as before.
+- Claims and leases are atomic conditional `UPDATE`s on the master connection. The SQLite tests exercise duplicate jobs, held leases, expiry and fencing sequentially. Truly concurrent workers on MySQL, MariaDB or PostgreSQL have not been verified.
 
 ### `GeneralLedgerService`
 
@@ -980,6 +1108,8 @@ Supported only with shared master data (`accounting.master_data.use_shared_datab
 
 Tenant lists accept primary keys or route keys, like `TenantReportRunner`. Results use canonical tenant ids. A failing tenant returns `result: failed` and is recorded for backoff; other tenants still run.
 
+Failure text is readable (since 2026-11-09). The returned `error`, the stored `last_error`, `status()` and the `sync failed:` readiness reason (including `assertReady()` validation messages shown by central reports) never contain SQL. A database failure reads `a database error occurred (SQLSTATE <state>); see the application log`. Other failures keep their message. Each failure adds `(reference <uuid>)`, and the full exception is reported through the host exception handler with the same `reference` in its log context. Rows stored earlier with SQL are sanitized when read.
+
 #### Central read source
 
 `accounting.reporting.read_source` (`ACCOUNTING_REPORTING_READ_SOURCE`) selects where tenant-list reports read their data. Signatures, payloads, calculations and validation are the same in both modes.
@@ -1044,6 +1174,7 @@ There is no fallback to tenant queries in central mode. Calls without a tenant l
 - `runReports(array $tenantIds, callable $report): array` selects live or central;
 - `readSource(): string` returns the resolved `live` or `central` value, using the rules above;
 - `resolveTenants(array $tenantIds): array` validates and resolves a list without initializing tenancy.
+- `allTenantIds(): array` (2026-11-09) returns every canonical tenant id of `tenancy.tenant_model`, ordered by key, without initializing tenancy (used by global monthly closing).
 
 `run()` is unchanged.
 

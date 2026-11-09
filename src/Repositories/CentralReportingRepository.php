@@ -8,6 +8,7 @@ use ESolution\LaravelAccounting\Models\AccountCategory;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\Service;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\AccountingErrorReporter;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Eloquent\Model;
@@ -175,7 +176,8 @@ class CentralReportingRepository
             ->update($values + ['updated_at' => $this->now()]);
     }
 
-    public function recordFailure(string $tenantId, string $operation, Throwable $error): void
+    /** Stores readable text only: database failures (SQL) become a generic message plus the log reference. */
+    public function recordFailure(string $tenantId, string $operation, Throwable $error, ?string $reference = null): void
     {
         $this->ensureSource($tenantId);
         $source = $this->source($tenantId);
@@ -187,7 +189,8 @@ class CentralReportingRepository
             'failures' => $failures,
             'last_attempt_at' => $this->now(),
             'next_attempt_at' => now()->addSeconds($delay)->toDateTimeString(),
-            'last_error' => mb_substr($operation.': '.get_class($error).': '.$error->getMessage(), 0, 2000),
+            'last_error' => mb_substr($operation.': '.AccountingErrorReporter::safeMessage($error)
+                .($reference === null ? '' : ' ('.trans('accounting::reporting.reference', ['reference' => $reference]).')'), 0, 2000),
         ];
         if ($operation === 'backfill') {
             $values['backfill_status'] = 'failed';
@@ -207,7 +210,8 @@ class CentralReportingRepository
             $reasons[] = 'backfill '.$source->backfill_status;
         }
         if ($source->sync_status === 'failed') {
-            $reasons[] = 'sync failed: '.$source->last_error;
+            // Sanitized again for rows recorded before failures were stored as readable text.
+            $reasons[] = 'sync failed: '.AccountingErrorReporter::sanitize($source->last_error);
         }
         if ($source->reconcile_status === 'drifted') {
             $reasons[] = 'drift detected; run accounting:reporting-reconcile';

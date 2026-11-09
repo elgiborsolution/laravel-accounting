@@ -3,11 +3,15 @@
 namespace ESolution\LaravelAccounting\Services;
 
 use ESolution\LaravelAccounting\Enums\JournalStatus;
+use ESolution\LaravelAccounting\Exceptions\ClosingPeriodException;
+use ESolution\LaravelAccounting\Jobs\CloseTenantMonthJob;
 use ESolution\LaravelAccounting\Models\Account;
 use ESolution\LaravelAccounting\Models\FiscalPeriod;
 use ESolution\LaravelAccounting\Models\MonthlyBalance;
 use ESolution\LaravelAccounting\Repositories\AccountCategoryRepository;
+use ESolution\LaravelAccounting\Repositories\ClosingRunRepository;
 use ESolution\LaravelAccounting\Support\AccountingConnectionResolver;
+use ESolution\LaravelAccounting\Support\AccountingErrorReporter;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\ReportingChangeLog;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
@@ -17,6 +21,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class ClosingService
 {
@@ -114,11 +119,11 @@ class ClosingService
                 ->first();
 
             if (! $period) {
-                throw new Exception("Fiscal period {$year}-{$month} not found");
+                throw new ClosingPeriodException(ClosingPeriodException::NOT_FOUND, "Fiscal period {$year}-{$month} not found");
             }
 
             if ($period->is_closed) {
-                throw new Exception("Fiscal period {$year}-{$month} is already closed");
+                throw new ClosingPeriodException(ClosingPeriodException::ALREADY_CLOSED, "Fiscal period {$year}-{$month} is already closed");
             }
 
             // 2. Validate journals are balanced
@@ -127,22 +132,17 @@ class ClosingService
             $journalTableWrapped = $this->wrapTable($journalTable);
             $detailTableWrapped = $this->wrapTable($detailTable);
 
-            $totals = DB::table($journalTable)
-                ->join($detailTable, "{$journalTable}.id", '=', "{$detailTable}.journal_entry_id")
-                ->whereYear("{$journalTable}.trx_date", $year)
-                ->whereMonth("{$journalTable}.trx_date", $month)
-                ->where("{$journalTable}.status", JournalStatus::POSTED)
-                ->select(
-                    DB::raw("SUM({$detailTableWrapped}.debit) as total_debit"),
-                    DB::raw("SUM({$detailTableWrapped}.credit) as total_credit")
-                )
-                ->first();
+            $totals = $this->postedMonthTotals($year, $month);
 
             $totalDebit = $totals->total_debit ?? 0;
             $totalCredit = $totals->total_credit ?? 0;
 
             if (round($totalDebit, 2) !== round($totalCredit, 2)) {
-                throw new Exception("Journals are not balanced for the period {$year}-{$month}. Total Debit: {$totalDebit}, Total Credit: {$totalCredit}");
+                throw new ClosingPeriodException(
+                    ClosingPeriodException::UNBALANCED,
+                    "Journals are not balanced for the period {$year}-{$month}. Total Debit: {$totalDebit}, Total Credit: {$totalCredit}",
+                    ['total_debit' => (float) $totalDebit, 'total_credit' => (float) $totalCredit]
+                );
             }
 
             // 3. Get all accounts with their category types
@@ -231,6 +231,36 @@ class ClosingService
         });
     }
 
+    /** Posted debit/credit totals of one calendar month on the active transaction connection. */
+    protected function postedMonthTotals($year, $month): ?object
+    {
+        $journalTable = $this->journalTable();
+        $detailTable = $this->journalDetailTable();
+        $detailTableWrapped = $this->wrapTable($detailTable);
+
+        return DB::table($journalTable)
+            ->join($detailTable, "{$journalTable}.id", '=', "{$detailTable}.journal_entry_id")
+            ->whereYear("{$journalTable}.trx_date", $year)
+            ->whereMonth("{$journalTable}.trx_date", $month)
+            ->where("{$journalTable}.status", JournalStatus::POSTED)
+            ->select(
+                DB::raw("SUM({$detailTableWrapped}.debit) as total_debit"),
+                DB::raw("SUM({$detailTableWrapped}.credit) as total_credit")
+            )
+            ->first();
+    }
+
+    /** Latest month whose execution date has arrived; null closing_day keeps the current month. */
+    protected function latestDueMonth(): Carbon
+    {
+        $lastMonth = now()->startOfMonth();
+        while (($due = $this->monthlyClosingDate($lastMonth->year, $lastMonth->month)) !== null && now()->lt($due)) {
+            $lastMonth->subMonth();
+        }
+
+        return $lastMonth;
+    }
+
     /**
      * Close all open fiscal periods up to the current month.
      */
@@ -239,11 +269,7 @@ class ClosingService
         if ($cutoffDate !== null) {
             return $this->closeThroughDate($cutoffDate, $userId);
         }
-        // Latest month whose execution date has arrived; null closing_day keeps the current month.
-        $lastMonth = now()->startOfMonth();
-        while (($due = $this->monthlyClosingDate($lastMonth->year, $lastMonth->month)) !== null && now()->lt($due)) {
-            $lastMonth->subMonth();
-        }
+        $lastMonth = $this->latestDueMonth();
         if (config('accounting.closing.cutoff_enabled', false)
             && app(FiscalPeriodService::class)->cutoffMode() === 'shared') {
             return $this->closeThroughDate($lastMonth->copy()->endOfMonth()->toDateString(), $userId);
@@ -553,6 +579,309 @@ class ClosingService
 
             return $period;
         });
+    }
+
+    // ------------------------------------------------------------------ global monthly closing
+
+    /**
+     * Close one calendar month in many tenants, one queued job per tenant. Null or [] selects every
+     * tenant of tenancy.tenant_model; an explicit list is resolved (ids or route keys) and
+     * deduplicated first. Tracking lives on the master connection; each tenant reuses closeMonth()
+     * (eligibility, transactions, shared lock, outbox) and never publishes or changes a shared
+     * cutoff. Scheduled calls keep one run per period: later calls resume that run instead of
+     * starting another, and periods that were closed before and reopened are skipped as not_due.
+     */
+    public function closeMonthGlobally(int $year, int $month, ?array $tenantIds = null, int|string|null $actorId = null, bool $scheduled = false): array
+    {
+        $actorId = $actorId === null ? null : trim((string) $actorId);
+        validator(['year' => $year, 'month' => $month, 'actor_id' => $actorId], [
+            'year' => ['required', 'integer', 'between:1,9999'],
+            'month' => ['required', 'integer', 'between:1,12'],
+            'actor_id' => ['nullable', 'string', 'max:100'],
+        ])->validate();
+        $runs = $this->closingRuns();
+        $runs->assertUsable();
+        // Invalid closing settings fail before any run is recorded.
+        $this->monthlyClosingDate($year, $month);
+
+        if ($scheduled && ($existing = $runs->latestRun($year, $month, 'scheduled')) !== null) {
+            $this->dispatchGlobalCloseItems($runs->recoverableItemIds((int) $existing->id, $this->globalCloseLeaseSeconds()));
+
+            return $this->getGlobalCloseRun((int) $existing->id);
+        }
+
+        $tenants = app(TenantReportRunner::class);
+        $ids = $tenantIds === null || $tenantIds === []
+            ? $tenants->allTenantIds()
+            : array_map('strval', array_keys($tenants->resolveTenants($tenantIds)));
+        if ($ids === []) {
+            throw ValidationException::withMessages(['tenant_ids' => ['No tenants were found to close.']]);
+        }
+
+        $runId = $runs->createRun($year, $month, $ids, $actorId, $scheduled ? 'scheduled' : 'manual');
+        $this->dispatchGlobalCloseItems($runs->items($runId)->pluck('id')->all());
+
+        return $this->getGlobalCloseRun($runId);
+    }
+
+    /** Progress and results of one run, with localized readable messages for failed and not_due tenants. */
+    public function getGlobalCloseRun(int $runId): array
+    {
+        $runs = $this->closingRuns();
+        $run = $runs->run($runId);
+        if (! $run) {
+            throw ValidationException::withMessages(['run_id' => ['Closing run ['.$runId.'] was not found.']]);
+        }
+        $items = $runs->items($runId);
+        $now = now()->toDateTimeString();
+        $counts = array_fill_keys(ClosingRunRepository::TENANT_STATUSES, 0);
+        foreach ($items as $item) {
+            $counts[$item->status] = ($counts[$item->status] ?? 0) + 1;
+        }
+
+        return [
+            'id' => (int) $run->id,
+            'year' => (int) $run->year,
+            'month' => (int) $run->month,
+            'period' => sprintf('%04d-%02d', $run->year, $run->month),
+            'trigger' => $run->trigger,
+            'status' => $run->status,
+            'actor_id' => $run->actor_id,
+            'tenant_ids' => json_decode($run->tenant_ids, true, 512, JSON_THROW_ON_ERROR),
+            'counts' => ['total' => $items->count()] + $counts,
+            'created_at' => $run->created_at,
+            'started_at' => $run->started_at,
+            'finished_at' => $run->finished_at,
+            'tenants' => $items->map(fn ($item) => [
+                'tenant_id' => $item->tenant_id,
+                'status' => $item->status,
+                'attempts' => (int) $item->attempts,
+                'started_at' => $item->started_at,
+                'finished_at' => $item->finished_at,
+                'total_debit' => $item->total_debit === null ? null : (float) $item->total_debit,
+                'total_credit' => $item->total_credit === null ? null : (float) $item->total_credit,
+                'stale' => $item->status === 'processing' && $item->claimed_until !== null && $item->claimed_until < $now,
+                'error' => $item->status === 'failed' ? $this->globalCloseMessage($item, $run) : null,
+                'reason' => $item->status === 'not_due' ? $this->globalCloseMessage($item, $run) : null,
+            ])->all(),
+        ];
+    }
+
+    /**
+     * Requeue failed tenants (and processing tenants whose claim expired) of a run. Completed,
+     * already-closed and not-due tenants are never touched; every attempt rechecks the period.
+     */
+    public function retryGlobalCloseRun(int $runId, ?array $tenantIds = null): array
+    {
+        $runs = $this->closingRuns();
+        $runs->assertUsable();
+        $run = $runs->run($runId);
+        if (! $run) {
+            throw ValidationException::withMessages(['run_id' => ['Closing run ['.$runId.'] was not found.']]);
+        }
+
+        $selected = null;
+        if ($tenantIds !== null && $tenantIds !== []) {
+            $members = json_decode($run->tenant_ids, true, 512, JSON_THROW_ON_ERROR);
+            $selected = [];
+            foreach ($tenantIds as $index => $tenantId) {
+                $tenantId = trim((string) $tenantId);
+                $canonical = in_array($tenantId, $members, true) ? $tenantId
+                    : (string) array_key_first(app(TenantReportRunner::class)->resolveTenants([$tenantId]));
+                if (! in_array($canonical, $members, true)) {
+                    throw ValidationException::withMessages(['tenant_ids.'.$index => ['Tenant ['.$tenantId.'] is not part of closing run ['.$runId.'].']]);
+                }
+                $selected[$canonical] = $canonical;
+            }
+            $selected = array_values($selected);
+        }
+
+        $this->dispatchGlobalCloseItems($runs->resetForRetry($runId, $selected));
+
+        return $this->getGlobalCloseRun($runId);
+    }
+
+    /**
+     * Crash recovery for unfinished runs: requeue processing tenants whose claim expired and
+     * pending tenants whose job never ran within one lease. Safe to schedule repeatedly.
+     *
+     * @return list<array{run_id: int, dispatched: int}>
+     */
+    public function recoverGlobalCloseRuns(): array
+    {
+        $runs = $this->closingRuns();
+        $runs->assertUsable();
+        $recovered = [];
+        foreach ($runs->unfinishedRunIds() as $runId) {
+            $runs->refreshRun($runId);
+            $ids = $runs->recoverableItemIds($runId, $this->globalCloseLeaseSeconds());
+            $this->dispatchGlobalCloseItems($ids);
+            $recovered[] = ['run_id' => $runId, 'dispatched' => count($ids)];
+        }
+
+        return $recovered;
+    }
+
+    /**
+     * Queue-worker entry point for one tenant of a run (CloseTenantMonthJob). Claims the item and its
+     * tenant/period lease, closes inside the tenant context (always restored), and records closed,
+     * already_closed, not_due or failed. Duplicate or late jobs return claimed = false.
+     */
+    public function processGlobalCloseTenant(int $itemId): array
+    {
+        $runs = $this->closingRuns();
+        $item = $runs->item($itemId);
+        $run = $item ? $runs->run((int) $item->run_id) : null;
+        if (! $item || ! $run) {
+            return ['item_id' => $itemId, 'claimed' => false, 'reason' => 'missing'];
+        }
+        [$token, $reason] = $runs->claim($item, $run, $this->globalCloseLeaseSeconds());
+        if ($token === null) {
+            return ['item_id' => $itemId, 'claimed' => false, 'reason' => $reason, 'status' => $runs->item($itemId)?->status];
+        }
+
+        $year = (int) $run->year;
+        $month = (int) $run->month;
+        $totals = [];
+        try {
+            $scheduled = $run->trigger === 'scheduled';
+            $closedBefore = $scheduled && $runs->closedInAnotherRun($item->tenant_id, $year, $month, (int) $run->id);
+            $entered = false;
+            try {
+                $outcome = app(TenantReportRunner::class)->run([$item->tenant_id], function () use ($year, $month, $run, $scheduled, $closedBefore, &$totals, &$entered) {
+                    $entered = true;
+
+                    return $this->closeTenantMonthForRun($year, $month, $run->actor_id, $scheduled, $closedBefore, $totals);
+                })[0]['report'];
+            } catch (Throwable $e) {
+                $outcome = $this->globalCloseFailure($e, $run, $item, $entered);
+            }
+            $runs->finish($itemId, $token, $outcome + $totals);
+        } finally {
+            $runs->releaseLease($item->tenant_id, $year, $month, $token);
+            $runs->refreshRun((int) $run->id);
+        }
+
+        return ['item_id' => $itemId, 'claimed' => true, 'status' => $outcome['status']];
+    }
+
+    /**
+     * Month a scheduled global close targets by default: the latest month whose closing day has
+     * arrived, or the previous calendar month when closing_day is not configured.
+     *
+     * @return array{year: int, month: int}
+     */
+    public function defaultGlobalCloseMonth(): array
+    {
+        $day = config('accounting.closing.closing_day');
+        $month = $day === null || $day === '' ? now()->startOfMonth()->subMonth() : $this->latestDueMonth();
+
+        return ['year' => $month->year, 'month' => $month->month];
+    }
+
+    /** Runs inside the tenant context; rechecks the period on every attempt. */
+    protected function closeTenantMonthForRun(int $year, int $month, ?string $actorId, bool $scheduled, bool $closedBefore, array &$totals): array
+    {
+        $due = $this->monthlyClosingDate($year, $month);
+        $posted = $this->postedMonthTotals($year, $month);
+        $totals = [
+            'total_debit' => round((float) ($posted->total_debit ?? 0), 2),
+            'total_credit' => round((float) ($posted->total_credit ?? 0), 2),
+        ];
+
+        $period = FiscalPeriod::query()->where('year', $year)->where('month', $month)->first();
+        if ($period?->is_closed) {
+            return ['status' => 'already_closed'];
+        }
+        if ($due !== null && now()->lt($due)) {
+            return ['status' => 'not_due', 'error_code' => 'not_due', 'error_params' => json_encode(['date' => $due->toDateString()])];
+        }
+        // A scheduled run never recloses a period someone reopened deliberately (retained snapshots
+        // or an earlier run's close show that it was closed before).
+        if ($scheduled && ($closedBefore || ($period !== null
+            && MonthlyBalance::query()->where('fiscal_year', $year)->where('fiscal_month', $month)->exists()))) {
+            return ['status' => 'not_due', 'error_code' => 'reopened_period'];
+        }
+
+        try {
+            $this->closeMonth($year, $month, $actorId);
+        } catch (ClosingPeriodException $e) {
+            if ($e->reason === ClosingPeriodException::ALREADY_CLOSED) {
+                return ['status' => 'already_closed'];
+            }
+            throw $e;
+        }
+
+        return ['status' => 'closed'];
+    }
+
+    /** Readable failure code plus a reference; the full exception goes to the application log. */
+    protected function globalCloseFailure(Throwable $e, object $run, object $item, bool $entered): array
+    {
+        $code = match (true) {
+            ! $entered => 'tenant_unavailable',
+            $e instanceof ClosingPeriodException && $e->reason === ClosingPeriodException::UNBALANCED => 'unbalanced_journals',
+            AccountingErrorReporter::isForeignKeyViolation($e) => 'account_reference_mismatch',
+            AccountingErrorReporter::isDatabaseError($e) => 'database_error',
+            $e instanceof ValidationException => 'configuration_error',
+            default => 'unexpected_error',
+        };
+        $params = $code === 'unbalanced_journals' ? [
+            'debit' => number_format((float) ($e->details['total_debit'] ?? 0), 2),
+            'credit' => number_format((float) ($e->details['total_credit'] ?? 0), 2),
+        ] : null;
+        $reference = AccountingErrorReporter::report($e, 'Accounting global monthly closing failed', [
+            'closing_run_id' => (int) $run->id,
+            'closing_run_tenant_id' => (int) $item->id,
+            'tenant_id' => $item->tenant_id,
+            'period' => sprintf('%04d-%02d', $run->year, $run->month),
+            'error_code' => $code,
+        ]);
+
+        return [
+            'status' => 'failed',
+            'error_code' => $code,
+            'error_params' => $params === null ? null : json_encode($params),
+            'error_reference' => $reference,
+        ];
+    }
+
+    protected function globalCloseMessage(object $item, object $run): array
+    {
+        $code = $item->error_code ?? ($item->status === 'failed' ? 'unexpected_error' : 'not_due');
+        $params = ($item->error_params === null ? [] : json_decode($item->error_params, true)) ?: [];
+        $replace = $params + [
+            'period' => Carbon::create((int) $run->year, (int) $run->month, 1)->locale(app()->getLocale())->translatedFormat('F Y'),
+            'reference' => (string) $item->error_reference,
+        ];
+
+        return [
+            'code' => $code,
+            'message' => trans('accounting::closing.errors.'.$code.'.message', $replace),
+            'action' => trans('accounting::closing.errors.'.$code.'.action', $replace),
+            'reference' => $item->error_reference,
+        ];
+    }
+
+    /** Dispatch after the surrounding transaction (if any) commits, so workers see the tracking rows. */
+    protected function dispatchGlobalCloseItems(array $itemIds): void
+    {
+        foreach ($itemIds as $itemId) {
+            CloseTenantMonthJob::dispatch((int) $itemId)
+                ->onConnection(config('accounting.closing.global.queue_connection'))
+                ->onQueue(config('accounting.closing.global.queue'))
+                ->afterCommit();
+        }
+    }
+
+    protected function globalCloseLeaseSeconds(): int
+    {
+        return max(60, (int) config('accounting.closing.global.lease_seconds', 900));
+    }
+
+    protected function closingRuns(): ClosingRunRepository
+    {
+        return app(ClosingRunRepository::class);
     }
 
     protected function transactionConnection(): ?string
