@@ -103,7 +103,7 @@ The tenant outbox (`000018`) and the other tenant tables keep targeting the tran
 
 | Key | Default | Meaning |
 |---|---|---|
-| `read_source` | `live` | `live` or `central` for tenant-list reports; any other value throws |
+| `read_source` | `live` | `live` or `central` for tenant-list reports (trimmed, case-insensitive). A missing key or block, `null` or an empty value means `live`; any other value throws |
 | `change_log_enabled` | `false` | Record outbox rows (requires the tenant table and shared master data) |
 | `max_lag_seconds` | `900` | Freshness limit; `null` disables the limit |
 | `batch_size` | `500` | Outbox rows per central batch |

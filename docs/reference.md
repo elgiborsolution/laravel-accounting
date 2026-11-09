@@ -982,7 +982,53 @@ Tenant lists accept primary keys or route keys, like `TenantReportRunner`. Resul
 
 #### Central read source
 
-`accounting.reporting.read_source` (`ACCOUNTING_REPORTING_READ_SOURCE`) is `live` by default. With `central`, every tenant-list call reads the central copies and never initializes tenancy. Signatures and payloads are identical to `live`. This covers:
+`accounting.reporting.read_source` (`ACCOUNTING_REPORTING_READ_SOURCE`) selects where tenant-list reports read their data. Signatures, payloads, calculations and validation are the same in both modes.
+
+| Value | Behaviour |
+| --- | --- |
+| `live` (default) | The original per-tenant path: `TenantReportRunner::run()` initializes each selected tenant, runs the queries on its transaction connection, then restores the previous tenant (or ends tenancy) and the caller's default connection. It never reads `acc_reporting_*` tables, so it works without the central or outbox migrations, without backfill and with `change_log_enabled = false`. |
+| `central` | Reads the synchronized `acc_reporting_*` copies and the existing master tables on `accounting.master_data.connection`. It never initializes tenancy or opens a tenant connection. Setup and sync readiness are checked first. There is no fallback to `live`. |
+
+How the value is resolved (`TenantReportRunner::readSource()`):
+- A missing key, a missing `reporting` block, `null` and an empty or whitespace-only value all mean `live`. This covers older published `config/accounting.php` files: Laravel merges package config shallowly, so a published file without a `reporting` block receives the package block (default `live`). A published `reporting` block without `read_source`, or a config cached from an older file, has no key at all.
+- Values are trimmed and case-insensitive, so `" Central "` means `central`.
+- Any other value (for example `replica`, `true` or `1`) throws `RuntimeException('accounting.reporting.read_source must be live or central.')` before any tenant is resolved or initialized.
+
+Setup examples:
+
+```dotenv
+# Existing installs: nothing to change. Omitting the variable, or leaving it empty, keeps live.
+ACCOUNTING_REPORTING_READ_SOURCE=live
+```
+
+```dotenv
+# Central reads, after shared master data, migrations, change log and backfill are in place
+ACCOUNTING_USE_SHARED_DATABASE=true
+ACCOUNTING_MASTER_CONNECTION=central
+ACCOUNTING_REPORTING_CHANGE_LOG_ENABLED=true
+ACCOUNTING_REPORTING_READ_SOURCE=central
+ACCOUNTING_REPORTING_MAX_LAG_SECONDS=900
+```
+
+```bash
+php artisan migrate --database=central                          # creates the central reporting tables
+php artisan accounting:reporting-backfill --tenant=tenant-a --tenant=tenant-b
+php artisan accounting:reporting-status                         # must report every tenant ready
+```
+
+If your published `config/accounting.php` predates central reporting, add the block (or republish with `php artisan vendor:publish --tag=accounting-config --force` and reapply your edits). Then run `php artisan config:clear`, or `config:cache` again if you cache config:
+
+```php
+'reporting' => [
+    'read_source' => env('ACCOUNTING_REPORTING_READ_SOURCE', 'live'),
+    'change_log_enabled' => env('ACCOUNTING_REPORTING_CHANGE_LOG_ENABLED', false),
+    'max_lag_seconds' => env('ACCOUNTING_REPORTING_MAX_LAG_SECONDS', 900),
+],
+```
+
+Omitted keys fall back to their defaults: `batch_size` 500, `lock_seconds` 600, `retry_base_seconds` 60, `retry_max_seconds` 3600 and `prune_after_days` 7.
+
+The setting applies to every tenant-list call:
 - `ReportService::profitLoss`, `balanceSheet`, `profitLossRange` and `profitLossDetail`;
 - the `ConsolidatedReportService` profit/loss, balance-sheet, summary, range, by-tenant, by-month and profit-detail methods;
 - `ProfitLossSummaryService::summarize` and `summarizeRange`;
@@ -994,8 +1040,9 @@ Before any data is read, the configuration is validated as above (`RuntimeExcept
 
 There is no fallback to tenant queries in central mode. Calls without a tenant list keep their existing behaviour. Methods without a tenant filter (`ReportService::generalLedger|trialBalance|cashFlow`, `GeneralLedgerService` ledger/detail methods) and closing operations remain live.
 
-`TenantReportRunner` gains two methods:
+`TenantReportRunner` gains three methods:
 - `runReports(array $tenantIds, callable $report): array` selects live or central;
+- `readSource(): string` returns the resolved `live` or `central` value, using the rules above;
 - `resolveTenants(array $tenantIds): array` validates and resolves a list without initializing tenancy.
 
 `run()` is unchanged.

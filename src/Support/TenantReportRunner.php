@@ -61,15 +61,32 @@ class TenantReportRunner
      */
     public function runReports(array $tenantIds, callable $report): array
     {
-        $source = config('accounting.reporting.read_source', 'live') ?? 'live';
-        if (! in_array($source, ['live', 'central'], true)) {
-            throw new RuntimeException('accounting.reporting.read_source must be live or central.');
-        }
-        if ($source === 'live') {
+        if ($this->readSource() === 'live') {
             return $this->run($tenantIds, $report);
         }
 
         return app(CentralReportContext::class)->run($this->resolveTenants($tenantIds), $report);
+    }
+
+    /**
+     * The configured tenant-list report source. A missing key or reporting block (older published
+     * configs), null or an empty value means 'live'; values are trimmed and case-insensitive.
+     * Anything else is rejected, never treated as live.
+     */
+    public function readSource(): string
+    {
+        $source = config('accounting.reporting.read_source');
+        if (is_string($source)) {
+            $source = strtolower(trim($source));
+        }
+        if ($source === null || $source === '') {
+            return 'live';
+        }
+        if (! in_array($source, ['live', 'central'], true)) {
+            throw new RuntimeException('accounting.reporting.read_source must be live or central.');
+        }
+
+        return $source;
     }
 
     /**

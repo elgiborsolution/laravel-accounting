@@ -19,52 +19,6 @@ class CentralReportingParityTest extends TestCase
 {
     use CentralReportingFixture;
 
-    /** Every central-capable report entry point, keyed by a readable name. */
-    private function reports(array $ids): array
-    {
-        $consolidated = app(ConsolidatedReportService::class);
-        $reports = app(ReportService::class);
-        $summaries = app(ProfitLossSummaryService::class);
-        $range = self::RANGE;
-
-        return [
-            'consolidated profitLoss' => fn () => $consolidated->profitLoss(2026, 6, $ids),
-            'consolidated balanceSheet May' => fn () => $consolidated->balanceSheet(2026, 5, $ids),
-            'consolidated balanceSheet June' => fn () => $consolidated->balanceSheet(2026, 6, $ids),
-            'consolidated profitLossSummary' => fn () => $consolidated->profitLossSummary(2026, 5, $ids),
-            'consolidated profitLossRange' => fn () => $consolidated->profitLossRange($range, $ids),
-            'consolidated profitLossSummaryRange' => fn () => $consolidated->profitLossSummaryRange($range, $ids),
-            'profitLossSummaryByTenant' => fn () => $consolidated->profitLossSummaryByTenant(2026, 5, $ids),
-            'profitLossSummaryRangeByTenant' => fn () => $consolidated->profitLossSummaryRangeByTenant($range, $ids),
-            'balanceSheetSummary April' => fn () => $consolidated->balanceSheetSummary(2026, 4, $ids),
-            'balanceSheetSummary June' => fn () => $consolidated->balanceSheetSummary(2026, 6, $ids),
-            'balanceSheetSummaryByTenant' => fn () => $consolidated->balanceSheetSummaryByTenant(2026, 5, $ids),
-            'balanceSheetSummaryByMonth' => fn () => $consolidated->balanceSheetSummaryByMonth($range, $ids),
-            'balanceSheetProfitDetail' => fn () => $consolidated->balanceSheetProfitDetail(2026, 6, $ids),
-            'balanceSheetProfitDetailByTenant' => fn () => $consolidated->balanceSheetProfitDetailByTenant(2026, 6, $ids),
-            'balanceSheetProfitDetailByMonth' => fn () => $consolidated->balanceSheetProfitDetailByMonth($range, $ids),
-            'per-tenant profitLoss' => fn () => $reports->profitLoss(2026, 5, $ids),
-            'per-tenant balanceSheet' => fn () => $reports->balanceSheet(2026, 6, $ids),
-            'per-tenant profitLossRange' => fn () => $reports->profitLossRange($range, $ids),
-            'per-tenant profitLossDetail' => fn () => $reports->profitLossDetail(2026, 6, $ids),
-            'summarize' => fn () => $summaries->summarize(2026, 5, $ids),
-            'summarizeRange' => fn () => $summaries->summarizeRange($range, $ids),
-            // Category retrieval and account breakdown (central since the tenant-filter audit).
-            // Balances cover a stored snapshot (June), carry-forward from earlier snapshots plus
-            // journals (July) and a month before any activity (March).
-            'categoryTree' => fn () => $consolidated->categoryTree($ids),
-            'categoryTree balances June' => fn () => $consolidated->categoryTree($ids, 2026, 6, true),
-            'categoryTree balances July' => fn () => $consolidated->categoryTree($ids, 2026, 7, true),
-            'categoryTree balances March' => fn () => $consolidated->categoryTree($ids, 2026, 3, true),
-            'category index' => fn () => json_decode(json_encode(app(AccountCategoryTreeService::class)
-                ->index(['with' => 'children,accounts,balance', 'year' => 2026, 'month' => 7], $ids)), true),
-            'category index filters' => fn () => json_decode(json_encode(app(AccountCategoryTreeService::class)
-                ->index(['tenant_ids' => $ids, 'search' => 'cash', 'with' => 'accounts,balance', 'year' => 2026, 'month' => 8, 'per_page' => 2])), true),
-            'accountBreakdown' => fn () => app(GeneralLedgerService::class)->getAccountBreakdown('1001', '2026-04-01', '2026-08-31', $ids),
-            'accountBreakdown revenue' => fn () => app(GeneralLedgerService::class)->getAccountBreakdown('4001', '2026-05-01', '2026-06-30', $ids),
-        ];
-    }
-
     public function test_every_report_matches_live_results_without_touching_tenant_databases(): void
     {
         $this->prepareReporting();
