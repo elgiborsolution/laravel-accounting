@@ -36,6 +36,14 @@ class CentralReportingParityTest extends TestCase
         $this->assertNotEquals(0.0, $live['accountBreakdown']['totals']['total_debit']);
         $balances = fn (array $nodes) => collect($nodes)->flatMap(fn ($node) => collect($node['accounts'])->pluck('balance'))->filter()->count();
         $this->assertGreaterThan(0, $balances($live['categoryTree balances July']['data'][0]['children'][0]['children']));
+        $this->assertSame(['current', 'open', 'stale', 'stale', 'open', 'open'], array_map(
+            fn (string $month) => $live['categoryBalanceTree '.$month]['status'], ['April', 'May', 'June', 'July', 'March', 'tenant-b July']
+        ));
+        $this->assertSame([['tenant_id' => 'tenant-a', 'status' => 'stale', 'reason' => 'reopened'], ['tenant_id' => 'tenant-b', 'status' => 'open', 'reason' => null]],
+            $live['categoryBalanceTree July']['snapshots'], 'July is stale through its reopened June base');
+        $this->assertNull($live['categoryBalanceTree June']['data'][0]['ending_balance']);
+        $this->assertNotEquals(0.0, $live['categoryBalanceTree May']['data'][0]['total_debit']);
+        $this->assertNotEquals(0.0, $live['categoryBalanceTree tenant-b July']['data'][0]['ending_balance']);
 
         $this->useCentral();
         $this->disconnectTenants();

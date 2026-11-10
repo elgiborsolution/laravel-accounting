@@ -181,6 +181,14 @@ trait CentralReportingFixture
             'categoryTree balances June' => fn () => $consolidated->categoryTree($ids, 2026, 6, true),
             'categoryTree balances July' => fn () => $consolidated->categoryTree($ids, 2026, 7, true),
             'categoryTree balances March' => fn () => $consolidated->categoryTree($ids, 2026, 3, true),
+            // Category balance tree: both current (April), current plus open (May), stale through a
+            // reopened month (June) and its carry-forward base (July), before any activity (March).
+            'categoryBalanceTree March' => fn () => $consolidated->categoryBalanceTree(2026, 3, $ids),
+            'categoryBalanceTree April' => fn () => $consolidated->categoryBalanceTree(2026, 4, $ids),
+            'categoryBalanceTree May' => fn () => $consolidated->categoryBalanceTree(2026, 5, $ids),
+            'categoryBalanceTree June' => fn () => $consolidated->categoryBalanceTree(2026, 6, $ids),
+            'categoryBalanceTree July' => fn () => $consolidated->categoryBalanceTree(2026, 7, $ids),
+            'categoryBalanceTree tenant-b July' => fn () => $consolidated->categoryBalanceTree(2026, 7, ['tenant-b']),
             'category index' => fn () => json_decode(json_encode(app(AccountCategoryTreeService::class)
                 ->index(['with' => 'children,accounts,balance', 'year' => 2026, 'month' => 7], $ids)), true),
             'category index filters' => fn () => json_decode(json_encode(app(AccountCategoryTreeService::class)

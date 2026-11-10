@@ -205,7 +205,7 @@ Journals, posting, reversals, fiscal periods and closing remain tenant-local and
 - `ReportService`, `ConsolidatedReportService`, `AccountBalanceService` (snapshot query, journal totals, earliest journal date) and `GeneralLedgerService::accountActivityTotals()` read snapshots, fiscal periods, snapshot counts, the earliest posted/journal date, legacy-sign rows and posted-movement queries through loaders that prefer the active central context. Master data comes from the unchanged `AccountCategoryRepository` / `AccountRepository` / `ServiceRepository` / `Account` calls. Calculations, payloads and stable-code checks are unchanged.
 - Central mode covers every tenant-filtered report path (audited 2026-11-06):
   - `ReportService::profitLoss|balanceSheet|profitLossRange|profitLossDetail`;
-  - every tenant-list `ConsolidatedReportService` method, including `categoryTree()`; its tenant id comes from `CentralReportContext::tenantId()` before the tenancy-based `categoryTenantIdentifier()`;
+  - every tenant-list `ConsolidatedReportService` method, including `categoryTree()` (and `categoryBalanceTree()`, added 2026-11-10); its tenant id comes from `CentralReportContext::tenantId()` before the tenancy-based `categoryTenantIdentifier()`;
   - `AccountCategoryTreeService::index()` with tenant lists;
   - `GeneralLedgerService::getAccountBreakdown()`;
   - `ProfitLossSummaryService`, and therefore the `tenant_ids` HTTP report endpoints.
@@ -282,6 +282,34 @@ Existing closing methods, signatures and return values are unchanged. Usage, sta
 - Concurrent workers on production drivers.
 - Real queue backends other than `sync`/fake.
 - Host tenancy bootstrappers in queued jobs.
+
+## Scoped update: category balance tree (2026-11-10)
+
+**Entry point (verified in source and tests).** `src/Services/ConsolidatedReportService.php::categoryBalanceTree(int $year, int $month, array $tenantIds): array` is a PHP-only method on the existing service. It adds no service, binding, route, controller, cache, migration or configuration. It returns `{tenant_ids, period, status, snapshots: [{tenant_id, status, reason}], data}`. Category and account nodes carry `normal_balance`, `opening_balance`, `total_debit`, `total_credit` and `ending_balance`. Usage, statuses and a response example are in `docs/reference.md` ("Category balance tree").
+
+**How it works.**
+- **Validation:** the period is validated with `ProfitLossSummaryCalculator::period()`, then the tenant list by `TenantReportRunner::runReports()`. Both happen before any tenant runs.
+- **Execution:** `runReports()` honours `reporting.read_source`; `live` reads tenant databases, `central` reads central copies without initializing tenancy.
+- **Source data:** each source reads the same data as `categoryTree()`: all categories, plus `visibleOrdered()` accounts for that tenant. It also reads `AccountBalanceService::getBalances()` with all four fields.
+- **Merging:** after restoration, `mergeSources()` performs the existing hierarchy and stable-code compatibility checks. The four fields are summed once per account code across tenants.
+- **Subtotals:** these are rebuilt by sign-aware addition. A child category with the opposite normal balance contributes negated opening/ending and unchanged movements, so `ending = opening ± movement` holds on every node. Category types outside the five known ones fail under `consolidation`.
+
+**Snapshot status.**
+- **Shared rules:** `balanceSheetSnapshotStatuses()` was split into `snapshotChainState()`, `snapshotChainStatus()` (which now also returns a reason) and `monthIndex()`. Balance-sheet summary statuses are unchanged; the 47 `BalanceSheetSummaryServicesTest` tests pass.
+- **Statuses:**
+  - `current`: the existing chain rules pass; amounts are snapshots.
+  - `open`: the month has no snapshot rows, and the latest earlier snapshot month is `current` or absent; amounts are calculated from posted journals.
+  - `stale`: otherwise, with reason `reopened`, `broken_chain` or `legacy_sign` from the month or its carry-forward base. Stale tenants are not queried for amounts.
+- **Combined result:** any stale tenant makes the overall status `stale` and nulls every amount. `getBalances()` itself is unchanged; it still prefers any matching snapshot, which is why this method checks status first.
+
+**Tests.** Full local suite on PHP 8.4.20: 468 tests, 3830 assertions, all passing. Uses SQLite and a host-tenancy double; deployed tenancy bootstrappers are unverified.
+- `tests/Feature/CategoryBalanceTreeTest.php` (21 tests) uses real `ClosingService` closes and reopen/reclose in both master modes. It covers:
+  - per-node arithmetic, the mixed-type subtotal, and ownership (another tenant's account, a hidden tenant-c account);
+  - alias deduplication and context restoration;
+  - snapshot use, zero months before any activity, and every stale reason;
+  - validation before any tenant runs;
+  - unsupported types, definition conflicts, and an unchanged `categoryTree()` shape.
+- `tests/Feature/Concerns/CentralReportingFixture.php::reports()` gains six `categoryBalanceTree` entries (current, open, stale and stale-base months). `CentralReportingParityTest` therefore checks live/central equality without tenant databases, and `ReportingReadSourceTest` checks central rejection without fallback.
 
 ## Evidence and scope
 
@@ -407,7 +435,7 @@ These public methods are integration surfaces even when no route exposes them. C
 | `ClosingService` | `closeMonth($year, $month, $userId = null)`, `closeThroughCurrentMonth($userId = null)`, alias `closeUntilCurrentMonth($userId = null)`, `reopenMonth($year, $month, $userId = null)`; global monthly closing (2026-11-09): `closeMonthGlobally(int $year, int $month, ?array $tenantIds = null, int\|string\|null $actorId = null, bool $scheduled = false)`, `getGlobalCloseRun(int $runId)`, `retryGlobalCloseRun(int $runId, ?array $tenantIds = null)`, `recoverGlobalCloseRuns()`, `processGlobalCloseTenant(int $itemId)`, `defaultGlobalCloseMonth()` |
 | `GeneralLedgerService` | `getLedger(string, int, int): array`; `getLedgerDetails(string $accountId, int $year, int $month, string\|int\|null $tenant = null, ?int $page = null, ?int $perPage = null): GeneralLedgerPaginator`; `getDetails(string, string, string, float, bool): array` |
 | `ReportService` | `generalLedger($accountId, $startDate, $endDate)` returns account/path and opening balance only; `trialBalance($year, $month)`, `cashFlow(...)` return report arrays; `profitLoss($year, $month, ?array $tenantIds = null)` and `balanceSheet(...)` additionally support separate per-tenant payloads through `TenantReportRunner`; `profitLossDetail($year, $month, ?array $tenantIds = null)` returns `{prior_months_profit_loss, current_month_profit_loss}` (runner rows with tenant IDs) and `profitLossDetailMarkers()` returns validated closing markers |
-| `ConsolidatedReportService` | `profitLoss($year, $month, array $tenantIds): array`, `balanceSheet(...)`: canonical tenant IDs, year/month and one arithmetic report; `profitLossSummary(...)`: same required arguments and `{tenant_ids, period, summary}` with nine components and four profit values; `profitLossSummaryByTenant($year, $month, array $tenantIds): array` / `profitLossSummaryRangeByTenant(array $range, array $tenantIds): array`: compact, separate tenant rows with four calculated profits; `categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array`: full merged chart and source UUID/code aliases for service retrieval; `balanceSheetSummary($year, $month, array $tenantIds)` / `balanceSheetSummaryByTenant(...)` / `balanceSheetSummaryByMonth(array $range, array $tenantIds)`: month-end asset/liability/equity totals, current assets/liabilities, `current_ratio`, `debt_ratio`, journal-based `current_year_profit_loss` and `balance_sheet_difference`, plus `current_year_period`, with `current`/`stale`/`missing` snapshot status and null snapshot metrics when unusable; `balanceSheetProfitDetail(...)` / `balanceSheetProfitDetailByTenant(...)` / `balanceSheetProfitDetailByMonth(...)`: informational `prior_months_profit_loss` / `current_month_profit_loss` excluding opening and closing-transfer journals |
+| `ConsolidatedReportService` | `profitLoss($year, $month, array $tenantIds): array`, `balanceSheet(...)`: canonical tenant IDs, year/month and one arithmetic report; `profitLossSummary(...)`: same required arguments and `{tenant_ids, period, summary}` with nine components and four profit values; `profitLossSummaryByTenant($year, $month, array $tenantIds): array` / `profitLossSummaryRangeByTenant(array $range, array $tenantIds): array`: compact, separate tenant rows with four calculated profits; `categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array`: full merged chart and source UUID/code aliases for service retrieval; `categoryBalanceTree(int $year, int $month, array $tenantIds): array` (2026-11-10): merged chart with opening/debit/credit/ending and `normal_balance` on every node, per-tenant `current`/`open`/`stale` snapshot status with reason, all amounts null when any tenant is stale; `balanceSheetSummary($year, $month, array $tenantIds)` / `balanceSheetSummaryByTenant(...)` / `balanceSheetSummaryByMonth(array $range, array $tenantIds)`: month-end asset/liability/equity totals, current assets/liabilities, `current_ratio`, `debt_ratio`, journal-based `current_year_profit_loss` and `balance_sheet_difference`, plus `current_year_period`, with `current`/`stale`/`missing` snapshot status and null snapshot metrics when unusable; `balanceSheetProfitDetail(...)` / `balanceSheetProfitDetailByTenant(...)` / `balanceSheetProfitDetailByMonth(...)`: informational `prior_months_profit_loss` / `current_month_profit_loss` excluding opening and closing-transfer journals |
 | `ProfitLossSummaryService` | `summarize($year, $month, array $tenantIds): array`: required tenant list and period; separate tenant summaries with nine classified components and four calculated profit values |
 | `Support\ServiceCatalog` | `all()`, group methods `sales()`, `salesVat()`, `purchase()`, `inventory()`, `finance()`, `expense()`, `payroll()`, `asset()`, `receivable()`, `payable()`, `tax()`, `closing()`, `find(string\|AccountingServiceCode)`, `normalizeCode(...)` (string input is unchanged) |
 | `Support\ServiceAccountTemplateRegistry` | `all()` returns definitions grouped by service code; `forService(string\|AccountingServiceCode)` returns templates or `[]` |

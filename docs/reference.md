@@ -759,7 +759,7 @@ File: [`src/Services/ConsolidatedReportService.php`](/c:/laragon/www/package-cus
 
 Purpose: arithmetic consolidation of monthly and month-range profit/loss reports/summaries, compact profit/loss summaries grouped by tenant, balance-sheet reports, and category charts for service retrieval.
 
-Dependencies: constructor-injected `ReportService`, `TenantReportRunner`, `AccountCategoryRepository`, and `AccountRepository`; consolidated summary methods resolve `ProfitLossSummaryCalculator`, grouped summary methods resolve `ProfitLossSummaryService`, and `categoryTree()` resolves `AccountBalanceService` from the Laravel container. Balance-sheet summaries also read `FiscalPeriod`, `MonthlyBalance` and `JournalEntry` on each tenant's transaction connection to classify snapshots, read `Account` with the category repository to detect legacy-signed snapshots, call `ReportService::profitLossRange()` for current-year profit/loss, and read `accounting.balance_sheet_summary` and `accounting.fiscal.start_month`. Profit detail methods call `ReportService::profitLossDetailMarkers()` and `profitLossDetail()`. The existing four-argument constructor is unchanged.
+Dependencies: constructor-injected `ReportService`, `TenantReportRunner`, `AccountCategoryRepository`, and `AccountRepository`; consolidated summary methods resolve `ProfitLossSummaryCalculator`, grouped summary methods resolve `ProfitLossSummaryService`, and `categoryTree()` and `categoryBalanceTree()` resolve `AccountBalanceService` from the Laravel container (`categoryBalanceTree()` also resolves `ProfitLossSummaryCalculator` for period validation and classifies snapshots like the balance-sheet summaries). Balance-sheet summaries also read `FiscalPeriod`, `MonthlyBalance` and `JournalEntry` on each tenant's transaction connection to classify snapshots, read `Account` with the category repository to detect legacy-signed snapshots, call `ReportService::profitLossRange()` for current-year profit/loss, and read `accounting.balance_sheet_summary` and `accounting.fiscal.start_month`. Profit detail methods call `ReportService::profitLossDetailMarkers()` and `profitLossDetail()`. The existing four-argument constructor is unchanged.
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
@@ -777,6 +777,7 @@ Dependencies: constructor-injected `ReportService`, `TenantReportRunner`, `Accou
 | `balanceSheetProfitDetailByTenant($year, $month, array $tenantIds): array` | All required; same period/list requirements | `array` | Returns `{tenant_ids, period: {year, month}, summaries: [{tenant_id, prior_months_profit_loss, current_month_profit_loss}, ...]}`. Never combines tenant amounts. |
 | `balanceSheetProfitDetailByMonth(array $range, array $tenantIds): array` | Complete inclusive range and nonempty valid tenant list required | `array` | Returns `{tenant_ids, period, summaries: [{period: {year, month}, summary}, ...]}`, one consolidated entry per month in chronological order. `period` is the six-field range period. |
 | `categoryTree(array $tenantIds, ?int $year = null, ?int $month = null, bool $withBalance = false): array` | Required nonempty valid tenant list; optional balance period and inclusion flag | `array` | Returns `{tenant_ids, data: [category nodes], category_aliases: {source_uuid: [category_codes]}}`. Merges full visible charts before `AccountCategoryTreeService::index()` applies filters and pagination. Defaults to metadata only; balance periods default through `AccountBalanceService`. |
+| `categoryBalanceTree(int $year, int $month, array $tenantIds): array` | All required; year >= 1, month 1..12, nonempty valid tenant list | `array` | Hierarchical account report. Returns `{tenant_ids, period: {year, month}, status, snapshots: [{tenant_id, status, reason}], data: [category nodes]}` where every category and account carries `normal_balance`, `opening_balance`, `total_debit`, `total_credit` and `ending_balance`, consolidated by stable codes. All amounts are `null` when any tenant's month is `stale`. See [Category balance tree](#category-balance-tree). |
 
 Tenant-grouped summary rules:
 
@@ -1009,6 +1010,97 @@ $combinedRangeSummary = $reports->profitLossSummaryRange($range, ['tenant-a', 't
 // $summary['tenant_ids'], $summary['period'], $summary['summary']['net_profit']
 ```
 
+#### Category balance tree
+
+`categoryBalanceTree(int $year, int $month, array $tenantIds): array` returns the chart as a tree for one month, with opening balance, posted debit and credit movements, and ending balance on every account and category. Selected tenants are consolidated into one tree.
+
+```php
+use ESolution\LaravelAccounting\Services\ConsolidatedReportService;
+
+$report = app(ConsolidatedReportService::class)->categoryBalanceTree(2026, 6, ['tenant-a', 'tenant-b']);
+
+if ($report['status'] === 'stale') {
+    // Amounts are withheld; $report['snapshots'] names each stale tenant and why.
+}
+```
+
+**Validation and execution.**
+- Year and month are validated first (`ValidationException` on `year` / `month`), then the whole tenant list (same rules as the other tenant-list methods). Nothing runs in any tenant until both pass.
+- `accounting.reporting.read_source = live` (default) initializes each tenant through the tenant runner and reads its database, then restores the caller's tenant and default connection. `central` reads the master tables and the synchronized central copies without initializing tenancy; unready tenants reject the call (see [Central read source](#central-read-source)).
+- Each tenant contributes central accounts (`tenant_id` null) plus its own accounts, as in `categoryTree()`. Accounts owned by another tenant, selected or not, never enter that tenant's amounts.
+- Codes are aligned and checked exactly as in `categoryTree()`: definitions must match across tenants, and conflicts throw `ValidationException` under `consolidation`. Each account is summed once per tenant; category subtotals are rebuilt from the merged accounts.
+
+**Amounts.** They come from `AccountBalanceService::getBalances()` and use its meanings:
+- `opening_balance`: the balance at the start of the month;
+- `total_debit` / `total_credit`: posted movements within the month (drafts excluded; opening-balance journals count as movements in the month they are dated);
+- `ending_balance`: the balance at the end of the month.
+
+**Snapshot status per tenant** (`snapshots[].status`):
+
+| Status | Meaning | Amounts |
+| --- | --- | --- |
+| `current` | The month is closed, and every month from the tenant's earliest posted journal through it is closed, in chronological `closed_at` order, with no legacy-signed snapshot. | Stored monthly snapshots. |
+| `open` | The month has no snapshot rows. Its carry-forward base (the latest earlier month with snapshots) is `current`, or there is none. | Calculated from posted journals on top of that base. |
+| `stale` | The month cannot be trusted; `reason` says why. | Not calculated. |
+
+Stale `reason` values apply to the requested month or, for a month without snapshots, to its carry-forward base:
+- `reopened`: the month is open but still has snapshot rows from an earlier close. Postings made after reopening are not in them.
+- `broken_chain`: an earlier month with journals was never closed, or was closed after a later month.
+- `legacy_sign`: an asset or expense snapshot in the chain was written with the credit-normal sign that `closeMonth()` used before its 2026-11-05 fix.
+
+The top-level `status` is `stale` if any tenant is stale, otherwise `open` if any tenant is open, otherwise `current`. When it is `stale`, the full chart is still returned, but **every amount is `null`**. A partial total could look complete, so none is shown. Reclose the affected months in order, then call again. Report only the healthy tenants by selecting them alone. This matches the `null` handling of `balanceSheetSummary()`.
+
+**Normal balances and subtotals.**
+- `normal_balance` is `debit` for `ASSET` and `EXPENSE` categories and `credit` for `LIABILITY`, `EQUITY` and `REVENUE`. Accounts take their category's side. Amounts keep their natural sign: positive means a balance on the normal side.
+- Each node satisfies `ending = opening + debit − credit` (debit-normal) or `ending = opening + credit − debit` (credit-normal).
+- A category's subtotal adds its direct accounts and child categories. A child with the **opposite** normal balance (for example a `LIABILITY` category under an `ASSET` parent) is converted to the parent's side: its opening and ending balances are subtracted, while its debit and credit movements are added unchanged. The identity above therefore holds on every node.
+- A category with any other type is rejected after context restoration with `ValidationException` under `consolidation`, because its normal balance cannot be determined.
+- Root categories of different types are never added together; there is no grand total.
+
+Response example (June: tenant-a's month has no snapshots and tenant-b's is closed; trimmed):
+
+```json
+{
+  "tenant_ids": ["tenant-a", "tenant-b"],
+  "period": {"year": 2026, "month": 6},
+  "status": "open",
+  "snapshots": [
+    {"tenant_id": "tenant-a", "status": "open", "reason": null},
+    {"tenant_id": "tenant-b", "status": "current", "reason": null}
+  ],
+  "data": [
+    {
+      "category_code": "ASSET", "parent_code": null, "type": "ASSET", "category_name": "Assets",
+      "report_type": "BS", "status": true, "sequence_no": 1, "normal_balance": "debit",
+      "opening_balance": 210.0, "total_debit": 30.0, "total_credit": 50.0, "ending_balance": 190.0,
+      "accounts": [],
+      "children": [
+        {
+          "category_code": "CURRENT_ASSET", "parent_code": "ASSET", "type": "ASSET", "category_name": "Current assets",
+          "report_type": "BS", "status": true, "sequence_no": 2, "normal_balance": "debit",
+          "opening_balance": 210.0, "total_debit": 30.0, "total_credit": 20.0, "ending_balance": 220.0,
+          "accounts": [
+            {"code": "1101", "category_code": "CURRENT_ASSET", "name": "Account 1101", "is_postable": true, "status": true,
+             "normal_balance": "debit", "opening_balance": 40.0, "total_debit": 0.0, "total_credit": 0.0, "ending_balance": 40.0}
+          ],
+          "children": ["..."]
+        },
+        {
+          "category_code": "ASSET_CLEARING", "parent_code": "ASSET", "type": "LIABILITY", "category_name": "Asset clearing",
+          "report_type": "BS", "status": true, "sequence_no": 4, "normal_balance": "credit",
+          "opening_balance": 0.0, "total_debit": 0.0, "total_credit": 30.0, "ending_balance": 30.0,
+          "accounts": ["..."], "children": []
+        }
+      ]
+    }
+  ]
+}
+```
+
+Here `ASSET` = `CURRENT_ASSET` (220) − `ASSET_CLEARING` (30) = 190: the credit-normal child is subtracted.
+
+The output follows `categoryTree()`'s conventions: database UUIDs are omitted, and categories are ordered by the first selected tenant's sequence, then name and code; accounts are ordered by code. The method adds no route, controller, binding, cache or migration. `categoryTree()`, `AccountCategoryTreeService::index()` and the HTTP category endpoints are unchanged, and still sum ending balances without sign conversion.
+
 See [consolidated report structures and examples](./consolidated-reports.md).
 
 ### `ProfitLossSummaryService`
@@ -1162,7 +1254,7 @@ The setting applies to every tenant-list call:
 - `ReportService::profitLoss`, `balanceSheet`, `profitLossRange` and `profitLossDetail`;
 - the `ConsolidatedReportService` profit/loss, balance-sheet, summary, range, by-tenant, by-month and profit-detail methods;
 - `ProfitLossSummaryService::summarize` and `summarizeRange`;
-- `ConsolidatedReportService::categoryTree()` and `AccountCategoryTreeService::index()` with tenant lists, including balances; `AccountBalanceService` reads central snapshots, journal totals and the earliest journal date while a central report runs;
+- `ConsolidatedReportService::categoryTree()`, `categoryBalanceTree()` (including its snapshot statuses) and `AccountCategoryTreeService::index()` with tenant lists, including balances; `AccountBalanceService` reads central snapshots, journal totals and the earliest journal date while a central report runs;
 - `GeneralLedgerService::getAccountBreakdown()`;
 - the `tenant_ids` HTTP report endpoints.
 

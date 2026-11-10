@@ -25,6 +25,9 @@ class ConsolidatedReportService
         'category_mappings' => ['CURRENT_ASSET' => 'current', 'CURRENT_LIABILITY' => 'current'],
     ];
 
+    /** Amount fields of categoryBalanceTree(), in AccountBalanceService::getBalances() terms. */
+    protected const BALANCE_FIELDS = ['opening_balance', 'total_debit', 'total_credit', 'ending_balance'];
+
     public function __construct(
         protected ReportService $reports,
         protected TenantReportRunner $tenants,
@@ -320,39 +323,68 @@ class ConsolidatedReportService
      */
     protected function balanceSheetSnapshotStatuses(array $months): array
     {
-        $indexOf = fn ($year, $month) => (int) $year * 12 + (int) $month - 1;
+        $state = $this->snapshotChainState();
+
+        return array_map(
+            fn (array $month) => $this->snapshotChainStatus($this->monthIndex($month['year'], $month['month']), $state)[0],
+            $months
+        );
+    }
+
+    /**
+     * Fiscal periods, snapshot row counts, legacy-signed months (keyed by month index) and the
+     * earliest posted journal month of the active tenant, from central copies in central mode.
+     */
+    protected function snapshotChainState(): array
+    {
         $central = app(CentralReportContext::class);
         $periods = ($central->fiscalPeriods() ?? FiscalPeriod::query()->get())
-            ->keyBy(fn (FiscalPeriod $period) => $indexOf($period->year, $period->month));
+            ->keyBy(fn (FiscalPeriod $period) => $this->monthIndex($period->year, $period->month));
         $snapshots = ($central->snapshotCounts() ?? MonthlyBalance::query()
             ->selectRaw('fiscal_year, fiscal_month, COUNT(*) as snapshot_count')
             ->groupBy('fiscal_year', 'fiscal_month')->get())
-            ->mapWithKeys(fn ($row) => [$indexOf($row->fiscal_year, $row->fiscal_month) => (int) $row->snapshot_count]);
+            ->mapWithKeys(fn ($row) => [$this->monthIndex($row->fiscal_year, $row->fiscal_month) => (int) $row->snapshot_count]);
         $legacy = $this->legacySignedSnapshotMonths()
-            ->mapWithKeys(fn ($row) => [$indexOf($row->fiscal_year, $row->fiscal_month) => true]);
+            ->mapWithKeys(fn ($row) => [$this->monthIndex($row->fiscal_year, $row->fiscal_month) => true]);
         $earliest = $central->active()
             ? $central->earliestPostedDate()
             : JournalEntry::query()->where('status', JournalStatus::POSTED->value)->min('trx_date');
-        $earliest = $earliest === null ? null : $indexOf(Carbon::parse($earliest)->year, Carbon::parse($earliest)->month);
+        $earliest = $earliest === null ? null : $this->monthIndex(Carbon::parse($earliest)->year, Carbon::parse($earliest)->month);
 
-        return array_map(function (array $month) use ($indexOf, $periods, $snapshots, $legacy, $earliest) {
-            $target = $indexOf($month['year'], $month['month']);
-            $period = $periods->get($target);
-            if (! $period || ! $period->is_closed) {
-                return ($snapshots->get($target, 0) > 0) ? 'stale' : 'missing';
-            }
-            $previousClosedAt = null;
-            for ($index = $earliest === null ? $target : min($earliest, $target); $index <= $target; $index++) {
-                $link = $periods->get($index);
-                if (! $link || ! $link->is_closed || $legacy->has($index)
-                    || ($previousClosedAt && $link->closed_at && $link->closed_at->lt($previousClosedAt))) {
-                    return 'stale';
-                }
-                $previousClosedAt = $link->closed_at ?? $previousClosedAt;
-            }
+        return ['periods' => $periods, 'snapshots' => $snapshots, 'legacy' => $legacy, 'earliest' => $earliest];
+    }
 
-            return 'current';
-        }, $months);
+    /**
+     * [status, reason] of one month index under the balanceSheetSnapshotStatuses() rules. Reasons:
+     * reopened (open month that retains snapshot rows), legacy_sign (a legacy-signed snapshot in the
+     * carry-forward chain) or broken_chain (an unclosed or out-of-order month in that chain).
+     */
+    protected function snapshotChainStatus(int $target, array $state): array
+    {
+        $period = $state['periods']->get($target);
+        if (! $period || ! $period->is_closed) {
+            return $state['snapshots']->get($target, 0) > 0 ? ['stale', 'reopened'] : ['missing', null];
+        }
+        $previousClosedAt = null;
+        $earliest = $state['earliest'];
+        for ($index = $earliest === null ? $target : min($earliest, $target); $index <= $target; $index++) {
+            $link = $state['periods']->get($index);
+            if ($state['legacy']->has($index)) {
+                return ['stale', 'legacy_sign'];
+            }
+            if (! $link || ! $link->is_closed
+                || ($previousClosedAt && $link->closed_at && $link->closed_at->lt($previousClosedAt))) {
+                return ['stale', 'broken_chain'];
+            }
+            $previousClosedAt = $link->closed_at ?? $previousClosedAt;
+        }
+
+        return ['current', null];
+    }
+
+    protected function monthIndex($year, $month): int
+    {
+        return (int) $year * 12 + (int) $month - 1;
     }
 
     /**
@@ -550,6 +582,176 @@ class ConsolidatedReportService
             'data' => $decorate($data['categories']),
             'category_aliases' => $aliases,
         ];
+    }
+
+    /**
+     * Hierarchical account report for one month: opening balance, posted debit/credit movements and
+     * ending balance on every account and category, consolidated across tenants by stable codes.
+     * Amounts come from AccountBalanceService (current snapshots, or posted journals for months
+     * without snapshots). When any tenant's month is stale every amount is null; see
+     * docs/reference.md ("Category balance tree") for statuses, reasons and sign handling.
+     */
+    public function categoryBalanceTree(int $year, int $month, array $tenantIds): array
+    {
+        $period = app(ProfitLossSummaryCalculator::class)->period($year, $month);
+
+        // read_source = central: master tables plus central snapshot/journal copies, no tenant initialization.
+        $sources = $this->tenants->runReports($tenantIds, function () use ($period) {
+            $tenantId = app(CentralReportContext::class)->tenantId() ?? $this->categoryTenantIdentifier();
+            $categories = $this->categories->allOrdered();
+            $accounts = $this->accounts->visibleOrdered($tenantId);
+            $definitions = $this->definitionsFor($categories, $accounts);
+            [$status, $reason] = $this->categoryBalanceSnapshotStatus($period['year'], $period['month']);
+            // Stale months are not queried for amounts; the merged result withholds them.
+            $balances = $status === 'stale'
+                ? collect()
+                : app(AccountBalanceService::class)->getBalances($accounts->pluck('id')->all(), $period['year'], $period['month']);
+            $ordering = [];
+            foreach ($categories as $category) {
+                $ordering['category:'.$category->category_code] = (int) $category->sequence_no;
+            }
+            $amounts = [];
+            foreach ($accounts as $account) {
+                $row = $balances->get($account->id, []);
+                $values = [];
+                foreach (self::BALANCE_FIELDS as $field) {
+                    $values[$field] = round((float) data_get($row, $field, 0), 2);
+                }
+                $amounts['account:'.$account->code] = $values;
+                $account->setAttribute('balance', $values['ending_balance']);
+            }
+
+            return [
+                'payload' => ['data' => ['categories' => $this->categories->buildTree($categories, $accounts)->all()]],
+                'definitions' => $definitions,
+                'ordering' => $ordering,
+                'amounts' => $amounts,
+                'snapshot' => ['status' => $status, 'reason' => $reason],
+            ];
+        });
+
+        // Context is restored; the existing merge validates hierarchy and code compatibility.
+        $ordering = [];
+        $totals = [];
+        foreach ($sources as $source) {
+            foreach ($source['report']['ordering'] as $code => $sequence) {
+                $ordering[$code] ??= $sequence;
+            }
+            foreach ($source['report']['amounts'] as $key => $values) {
+                foreach ($values as $field => $amount) {
+                    $totals[$key][$field] = round(($totals[$key][$field] ?? 0.0) + $amount, 2);
+                }
+            }
+        }
+        $data = $this->mergeSources($sources, ['categories' => null], $ordering)['categories'];
+        $nodes = array_map(fn (array $node) => $this->balanceTreeNode($node, $totals, $ordering), $data);
+
+        $snapshots = array_map(fn (array $source) => ['tenant_id' => $source['tenant_id']] + $source['report']['snapshot'], $sources);
+        $statuses = array_column($snapshots, 'status');
+        $status = in_array('stale', $statuses, true) ? 'stale' : (in_array('open', $statuses, true) ? 'open' : 'current');
+        if ($status === 'stale') {
+            $nodes = $this->withheldBalanceNodes($nodes);
+        }
+
+        return [
+            'tenant_ids' => array_column($sources, 'tenant_id'),
+            'period' => $period,
+            'status' => $status,
+            'snapshots' => $snapshots,
+            'data' => $nodes,
+        ];
+    }
+
+    /**
+     * [status, reason] of the requested month in the active tenant for categoryBalanceTree():
+     * - current: closed with an intact carry-forward chain; amounts are the stored snapshots;
+     * - open: no snapshot rows, so getBalances() calculates from posted journals on top of the latest
+     *   earlier snapshot month, which must itself be current (or absent);
+     * - stale: the month or that carry-forward base is reopened, legacy-signed or has a broken chain.
+     */
+    protected function categoryBalanceSnapshotStatus(int $year, int $month): array
+    {
+        $state = $this->snapshotChainState();
+        $target = $this->monthIndex($year, $month);
+        [$status, $reason] = $this->snapshotChainStatus($target, $state);
+        if ($status !== 'missing') {
+            return [$status, $reason];
+        }
+        $base = $state['snapshots']->keys()->filter(fn ($index) => $index < $target)->max();
+        if ($base === null) {
+            return ['open', null];
+        }
+        [$baseStatus, $baseReason] = $this->snapshotChainStatus((int) $base, $state);
+
+        return $baseStatus === 'current' ? ['open', null] : ['stale', $baseReason];
+    }
+
+    /**
+     * One merged category with balance fields. Accounts carry their category's normal balance.
+     * A child category of the opposite normal balance is converted to this category's side before
+     * it is added: opening/ending change sign, debit/credit movements are added unchanged, so
+     * ending = opening + debit - credit (debit-normal) or opening + credit - debit holds per node.
+     */
+    protected function balanceTreeNode(array $node, array $totals, array $ordering): array
+    {
+        $side = $this->normalBalance($node);
+        $sum = array_fill_keys(self::BALANCE_FIELDS, 0.0);
+        $accounts = [];
+        foreach ($node['accounts'] as $account) {
+            unset($account['balance']);
+            $values = $totals['account:'.$account['code']];
+            $accounts[] = $account + ['normal_balance' => $side] + $values;
+            $sum = $this->addBalances($sum, $values, false);
+        }
+        $children = [];
+        foreach ($node['children'] as $child) {
+            $child = $this->balanceTreeNode($child, $totals, $ordering);
+            $children[] = $child;
+            $sum = $this->addBalances($sum, $child, $child['normal_balance'] !== $side);
+        }
+        unset($node['balance'], $node['accounts'], $node['children']);
+
+        return $node + [
+            'sequence_no' => $ordering['category:'.$node['category_code']] ?? 0,
+            'normal_balance' => $side,
+        ] + $sum + ['accounts' => $accounts, 'children' => $children];
+    }
+
+    protected function addBalances(array $sum, array $values, bool $opposite): array
+    {
+        $sign = $opposite ? -1 : 1;
+
+        return [
+            'opening_balance' => round($sum['opening_balance'] + $sign * $values['opening_balance'], 2),
+            'total_debit' => round($sum['total_debit'] + $values['total_debit'], 2),
+            'total_credit' => round($sum['total_credit'] + $values['total_credit'], 2),
+            'ending_balance' => round($sum['ending_balance'] + $sign * $values['ending_balance'], 2),
+        ];
+    }
+
+    /** debit for ASSET/EXPENSE, credit for LIABILITY/EQUITY/REVENUE; other types are rejected. */
+    protected function normalBalance(array $node): string
+    {
+        $type = strtoupper((string) $node['type']);
+        if (in_array($type, ['ASSET', 'EXPENSE'], true)) {
+            return 'debit';
+        }
+        if (in_array($type, ['LIABILITY', 'EQUITY', 'REVENUE'], true)) {
+            return 'credit';
+        }
+
+        $this->invalid('Category ['.$node['category_code'].'] has unsupported type ['.$node['type'].'] for a normal balance.');
+    }
+
+    protected function withheldBalanceNodes(array $nodes): array
+    {
+        return array_map(function (array $node) {
+            $node = array_replace($node, array_fill_keys(self::BALANCE_FIELDS, null));
+            $node['accounts'] = array_map(fn (array $account) => array_replace($account, array_fill_keys(self::BALANCE_FIELDS, null)), $node['accounts']);
+            $node['children'] = $this->withheldBalanceNodes($node['children']);
+
+            return $node;
+        }, $nodes);
     }
 
     protected function categoryTenantIdentifier(): string
