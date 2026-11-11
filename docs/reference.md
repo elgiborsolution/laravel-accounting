@@ -318,14 +318,15 @@ Dependencies: `AccountCategoryRepository`, `AccountingTableResolver`, `FiscalPer
 | `closeMonth($year, $month, $userId = null)` | Year/month required; closer ID optional | `FiscalPeriod` | Ensures the selected calendar period, upserts its monthly balances, and marks it closed. Optional `closing_day` (1–31 or `month_end`) rejects execution before that day in the selected or following month, per `closing_day_month`. Snapshots use natural signs: `ASSET`/`EXPENSE` categories (compared case-insensitively) are debit-normal, others credit-normal; an account without a resolvable category stays debit-normal. |
 | `closeThroughCurrentMonth($userId = null, ?string $cutoffDate = null)` | Optional closer ID and `Y-m-d` cutoff | `Collection<FiscalPeriod>\|array` | Explicit dates delegate to `closeThroughDate()`. Without a date, closes due months; null `closing_day` retains closing through the current month. Enabled shared mode publishes the applicable month-end cutoff for the saved scope. It takes no tenant argument, so the first shared close must use `closeThroughDate(..., $tenantIds)`. |
 | `closeUntilCurrentMonth($userId = null, ?string $cutoffDate = null)` | Optional closer ID and cutoff | `Collection<FiscalPeriod>\|array` | Alias of `closeThroughCurrentMonth()`. |
-| `reopenMonth($year, $month, $userId = null)` | Year/month required; user ID currently unused | `FiscalPeriod` | Reopens one closed period. |
+| `reopenMonth($year, $month, $userId = null)` | Year/month required; user ID currently unused | `FiscalPeriod` | Reopens one closed period. Refusals throw `ClosingPeriodException` (extends `Exception`; messages unchanged since 2026-11-11) with `reason` `not_found`, `not_closed` or `later_month_closed` (`details` = the latest closed later month's `year`/`month`). |
 | `closeThroughDate(string $cutoffDate, int\|string\|null $userId = null, ?string $reason = null, ?array $tenantIds = null): array` | Required `Y-m-d` cutoff; optional actor/reason and tenant scope | `array` | Per-tenant mode advances independent date locks. Shared mode closes complete months in every selected tenant, then atomically publishes one cutoff and audit event centrally. |
 | `reopenCutoff(?string $cutoffDate, string $reason, int\|string\|null $userId = null, ?array $tenantIds = null): array` | Earlier retained cutoff, or null; nonblank reason required; actor/scope optional | `array` | Reopens local cutoffs independently or one shared cutoff. Shared reopening validates monthly locks in every participant before changing central state. |
 | `getCutoffDate(): ?string` | None | `string\|null` | Reads the saved local or authoritative shared cutoff; null means no active cutoff or disabled protection. |
 | `getCutoffHistory(): Collection` | None; cutoff feature must be enabled | `Collection<object>` | Returns audit events in increasing event-ID order, including prior dates, new dates, actor, reason, action and timestamp. |
 | `closeMonthGlobally(int $year, int $month, ?array $tenantIds = null, int\|string\|null $actorId = null, bool $scheduled = false): array` | Year/month required; null or `[]` tenants means every tenant of `tenancy.tenant_model`; actor (max 100 chars); scheduler flag | Run array | Records a tracked run on the master connection and queues one job per tenant after commit. See [Global monthly closing](#global-monthly-closing). |
-| `getGlobalCloseRun(int $runId): array` | Run id | Run array | Progress and per-tenant results with localized readable messages. |
-| `retryGlobalCloseRun(int $runId, ?array $tenantIds = null): array` | Run id; optional subset of the run's tenants (ids or route keys) | Run array | Requeues failed tenants and tenants whose claim expired. Other tenants are untouched. |
+| `reopenMonthGlobally(int $year, int $month, ?array $tenantIds, string $reason, int\|string\|null $actorId = null): array` | Year/month required; null or `[]` tenants means every tenant; nonblank reason (max 1000 chars) required; actor (max 100 chars) | Run array (`operation: reopen`) | Records a tracked reopen run on the master connection and queues one job per tenant after commit; each tenant runs `reopenMonth()`. See [Global monthly reopening](#global-monthly-reopening). (2026-11-11) |
+| `getGlobalCloseRun(int $runId): array` | Run id | Run array | Progress and per-tenant results of a close or reopen run with localized readable messages. |
+| `retryGlobalCloseRun(int $runId, ?array $tenantIds = null): array` | Run id; optional subset of the run's tenants (ids or route keys) | Run array | Requeues failed tenants and tenants whose claim expired, for close and reopen runs. Other tenants are untouched. |
 | `recoverGlobalCloseRuns(): array` | None | `list<{run_id, dispatched}>` | Crash recovery: requeues stale processing tenants and pending tenants whose job never ran within one lease, for every unfinished run. |
 | `processGlobalCloseTenant(int $itemId): array` | Tracking item id | `{item_id, claimed, status?, reason?}` | Queue-worker entry point used by `CloseTenantMonthJob`; hosts normally do not call it. |
 | `defaultGlobalCloseMonth(): array` | None | `{year, month}` | Latest month whose `closing_day` has arrived, or the previous calendar month when `closing_day` is null. Used by the command's default period. |
@@ -508,7 +509,7 @@ A global close never publishes, advances or changes a shared cutoff or its scope
 
 **Scheduled runs.** With `$scheduled = true`, a period has at most one scheduled run. Later scheduled calls for the same period return that run, requeuing stale or never-run tenants, instead of starting another. Scheduled runs never close a period that was closed before and then reopened. They detect this from retained snapshots or from an earlier run's `closed` row, and report `not_due` with code `reopened_period`. Close such periods with a manual run or `closeMonth()` once corrections are done. Tenants added after the scheduled run was created are not included; start a manual run for them.
 
-**Results.** Every run method returns:
+**Results.** Every run method returns the array below. Since 2026-11-11 it also carries `operation` (`close`), `reason` (null) and, per tenant, `notice` (null for close runs) and `tracked_period` (see [Global monthly reopening](#global-monthly-reopening)); existing keys and values are unchanged.
 
 ```json
 {
@@ -551,7 +552,8 @@ A global close never publishes, advances or changes a shared cutoff or its scope
 | `--actor=` | Actor recorded on the run and as `closed_by` (use a value compatible with that column) |
 | `--scheduled` | Scheduler mode described above |
 | `--recover` | Run `recoverGlobalCloseRuns()` first; alone, only recovers |
-| `--retry=ID` / `--status=ID` | Retry failed tenants of a run / print a run |
+| `--retry=ID` / `--status=ID` | Retry failed tenants of a run / print a run (close or reopen run) |
+| `--reopen --reason=` | Reopen instead of close (2026-11-11): requires `--year`, `--month` and a reason; accepts `--tenant` and `--actor`; rejects `--scheduled`. See [Global monthly reopening](#global-monthly-reopening). |
 
 The package registers no schedule. Example host schedule:
 
@@ -581,6 +583,83 @@ Limits:
 
 - Each run closes exactly one month. It does not require the previous month to be closed: `closeMonth()` carries forward whatever snapshots the previous month has, as before.
 - Claims and leases are atomic conditional `UPDATE`s on the master connection. The SQLite tests exercise duplicate jobs, held leases, expiry and fencing sequentially. Truly concurrent workers on MySQL, MariaDB or PostgreSQL have not been verified.
+
+#### Global monthly reopening
+
+`reopenMonthGlobally()` (2026-11-11) reopens one calendar month in many tenants and keeps going when some fail. It shares everything with global closing: the tracking tables, `CloseTenantMonthJob`, queue routing (`closing.global.*`), claims, the tenant/period lease, `getGlobalCloseRun()`, `retryGlobalCloseRun()` and `recoverGlobalCloseRuns()`. Each tenant runs the existing `reopenMonth()`, so its rules are unchanged:
+
+- The period must exist and be closed, and no later month may be closed; reopen the latest month first.
+- `withClosingLock()` (shared mode) and the cutoff row lock are taken as before.
+- Snapshots are retained; reclosing replaces them.
+- Caches are cleared and the reporting outbox row (`month:YYYY-MM reopened`) is written in the same tenant transaction, so central reporting receives the open period and the retained (now `stale`) snapshots on the next `accounting:reporting-sync`.
+
+**Setup.** Everything from global closing, plus `2026_11_11_000021_add_operation_to_acc_closing_runs_table` on the master connection (`php artisan migrate --database=<master>`). It adds `operation` (`close`/`reopen`; existing rows become `close`), `reason`, `reopened_count` and `already_open_count` to `acc_closing_runs`, and does nothing on tenant runs. Global closing keeps working without it; `reopenMonthGlobally()` throws a `RuntimeException` naming the connection until it has run.
+
+**Inputs.** Year and month; tenant ids or route keys (null or `[]` means every tenant of `tenancy.tenant_model`; resolved and deduplicated before anything is saved); a required, nonblank reason (trimmed, max 1000 chars); an optional actor (max 100 chars). The reason and actor are stored on the run. `reopenMonth()` itself keeps no per-tenant audit; it clears `closed_at`/`closed_by` as before.
+
+**Tenant statuses.** `pending`, `processing`, `reopened`, `already_open`, `failed`. Run statuses and their rules are the same as for closing (`completed` when nothing failed). `counts` for a reopen run has the keys `total`, `pending`, `processing`, `reopened`, `already_open`, `failed`; close runs keep their existing keys.
+
+| Code | Kind | Cause |
+| --- | --- | --- |
+| `later_month_closed` | `error` | A later month is still closed (`:later` names the latest one) |
+| `period_not_found` | `error` | The fiscal period does not exist in that tenant |
+| `tenant_unavailable`, `database_error`, `configuration_error`, `unexpected_error` | `error` | As for closing, with reopen wording |
+| `cutoff_active` | `notice` | The month was reopened, but a closing cutoff (per tenant, or shared with this tenant in its scope) still covers part of it. Corrections dated on or before `:date` stay blocked until `reopenCutoff()` moves it. |
+
+Errors carry a reference that matches the application log entry (log context adds `operation: reopen`); notices have no reference. Messages come from `accounting::closing.reopen.*` (falling back to `accounting::closing.errors.*`) in the application locale.
+
+**Cutoffs stay explicit.** A global reopen never moves a per-tenant or shared cutoff, and its scope is unchanged. Use `reopenCutoff()` with a reason when corrections must be posted inside the cutoff. Reopening the months first is what lets `reopenCutoff()` move a cutoff back past them.
+
+**Duplicates, overlap and crashes.** Close and reopen jobs for the same tenant and period share one lease, so they never run at the same time; a busy job is released for 60 seconds. Duplicate or late jobs return `claimed: false`. Every attempt rechecks the period: an open period is `already_open`, except when an earlier attempt of the same item started before the period's last change and the month still has snapshots. That is a reopen committed by a worker that died before recording it, and it is reported as `reopened` without reopening again. (A manual `reopenMonth()` made between two attempts of the same item is credited the same way.)
+
+**History and scheduling.**
+
+- Close runs are history: a later reopen never changes their rows. Every tenant entry in any run has `tracked_period` with the latest finished close/reopen outcome of that tenant and period across all global runs: `{state: open|closed, run_id, operation, status, finished_at}`, or null. Direct `closeMonth()`/`reopenMonth()` calls are not tracked there.
+- Scheduled global closing never recloses a period a reopen run reopened, even when its snapshots were deleted: it reports `not_due` with code `reopened_period`. A manual close run, `closeMonth()`, a host job that calls `closeThroughCurrentMonth()`, or advancing a shared cutoff still recloses it deliberately.
+- Reopen runs are never scheduled.
+
+```php
+$closing = app(\ESolution\LaravelAccounting\Services\ClosingService::class);
+
+$run = $closing->reopenMonthGlobally(2026, 7, null, 'Correct July postings', auth()->id()); // every tenant
+$run = $closing->reopenMonthGlobally(2026, 7, ['branch-a', 'branch-b'], 'Correct July postings');
+
+$progress = $closing->getGlobalCloseRun($run['id']);   // operation, reason, counts, tenants[*].error|notice|tracked_period
+$retried  = $closing->retryGlobalCloseRun($run['id']); // failed tenants only (e.g. after reopening August first)
+
+// Only when corrections must be posted inside the cutoff:
+$closing->reopenCutoff('2026-06-30', 'Correct July postings', auth()->id());
+```
+
+```bash
+php artisan accounting:closing-close-month --reopen --year=2026 --month=7 --reason="Correct July postings" --actor=42
+php artisan accounting:closing-close-month --reopen --year=2026 --month=7 --tenant=branch-a --reason="Correct July postings"
+php artisan accounting:closing-close-month --status=12   # "Reopening run #12 (manual) for 2026-07: ..."
+php artisan accounting:closing-close-month --retry=12
+php artisan accounting:closing-close-month --recover
+```
+
+Reopen run result (abridged):
+
+```json
+{
+  "id": 12, "operation": "reopen", "period": "2026-07", "trigger": "manual", "status": "partially_failed",
+  "actor_id": "42", "reason": "Correct July postings",
+  "counts": {"total": 2, "pending": 0, "processing": 0, "reopened": 1, "already_open": 0, "failed": 1},
+  "tenants": [
+    {"tenant_id": "branch-a", "status": "reopened", "attempts": 1, "error": null,
+     "notice": {"code": "cutoff_active", "message": "July 2026 was reopened, but the closing cutoff through 2026-07-31 still blocks corrections dated on or before it.",
+                "action": "Move the cutoff back with reopenCutoff() and a reason before posting those corrections.", "reference": null},
+     "tracked_period": {"state": "open", "run_id": 12, "operation": "reopen", "status": "reopened", "finished_at": "…"}},
+    {"tenant_id": "branch-b", "status": "failed", "attempts": 1, "notice": null,
+     "error": {"code": "later_month_closed", "message": "July 2026 cannot be reopened because August 2026 is still closed.",
+               "action": "Reopen the later months first, latest first, then retry. Reference: 9c1e….", "reference": "9c1e…"},
+     "tracked_period": {"state": "closed", "run_id": 11, "operation": "close", "status": "closed", "finished_at": "…"}}
+  ]
+}
+```
+
+Each run reopens exactly one month and does not cascade. The same concurrency limits as global closing apply.
 
 ### `GeneralLedgerService`
 

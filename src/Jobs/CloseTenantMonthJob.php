@@ -9,9 +9,9 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 
 /**
- * Closes one tenant of a global monthly-closing run. The job holds only the tracking item id;
- * ClosingService::processGlobalCloseTenant() claims the item, rechecks the fiscal period and
- * records the outcome, so duplicate or redelivered jobs are harmless.
+ * Closes (or, for a reopen run, reopens) one tenant of a global monthly run. The job holds only
+ * the tracking item id; ClosingService::processGlobalCloseTenant() claims the item, rechecks the
+ * fiscal period and records the outcome, so duplicate or redelivered jobs are harmless.
  */
 class CloseTenantMonthJob implements ShouldQueue
 {

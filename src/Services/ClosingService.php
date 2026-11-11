@@ -15,11 +15,11 @@ use ESolution\LaravelAccounting\Support\AccountingErrorReporter;
 use ESolution\LaravelAccounting\Support\AccountingTableResolver;
 use ESolution\LaravelAccounting\Support\ReportingChangeLog;
 use ESolution\LaravelAccounting\Support\TenantReportRunner;
-use Exception;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Lang;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -546,24 +546,29 @@ class ClosingService
                 ->where('month', $month)
                 ->first();
 
+            // ClosingPeriodException extends Exception; the messages are unchanged for existing callers.
             if (! $period) {
-                throw new Exception("Fiscal period {$year}-{$month} not found");
+                throw new ClosingPeriodException(ClosingPeriodException::NOT_FOUND, "Fiscal period {$year}-{$month} not found");
             }
 
             if (! $period->is_closed) {
-                throw new Exception("Fiscal period {$year}-{$month} is not closed");
+                throw new ClosingPeriodException(ClosingPeriodException::NOT_CLOSED, "Fiscal period {$year}-{$month} is not closed");
             }
 
-            // Check if any subsequent months are closed
+            // Check if any subsequent months are closed (the latest one must be reopened first)
             $subsequentClosed = FiscalPeriod::where(function ($query) use ($year, $month) {
                 $query->where('year', '>', $year)
                     ->orWhere(function ($q) use ($year, $month) {
                         $q->where('year', $year)->where('month', '>', $month);
                     });
-            })->where('is_closed', true)->exists();
+            })->where('is_closed', true)->orderByDesc('year')->orderByDesc('month')->first();
 
             if ($subsequentClosed) {
-                throw new Exception('Cannot reopen this month because subsequent months are already closed. Please reopen them first.');
+                throw new ClosingPeriodException(
+                    ClosingPeriodException::LATER_MONTH_CLOSED,
+                    'Cannot reopen this month because subsequent months are already closed. Please reopen them first.',
+                    ['year' => (int) $subsequentClosed->year, 'month' => (int) $subsequentClosed->month]
+                );
             }
 
             $period->update([
@@ -610,13 +615,7 @@ class ClosingService
             return $this->getGlobalCloseRun((int) $existing->id);
         }
 
-        $tenants = app(TenantReportRunner::class);
-        $ids = $tenantIds === null || $tenantIds === []
-            ? $tenants->allTenantIds()
-            : array_map('strval', array_keys($tenants->resolveTenants($tenantIds)));
-        if ($ids === []) {
-            throw ValidationException::withMessages(['tenant_ids' => ['No tenants were found to close.']]);
-        }
+        $ids = $this->globalRunTenantIds($tenantIds, 'close');
 
         $runId = $runs->createRun($year, $month, $ids, $actorId, $scheduled ? 'scheduled' : 'manual');
         $this->dispatchGlobalCloseItems($runs->items($runId)->pluck('id')->all());
@@ -624,7 +623,56 @@ class ClosingService
         return $this->getGlobalCloseRun($runId);
     }
 
-    /** Progress and results of one run, with localized readable messages for failed and not_due tenants. */
+    /**
+     * Reopen one calendar month in many tenants, one queued job per tenant, tracked like
+     * closeMonthGlobally() (operation 'reopen'). Null or [] selects every tenant. Each tenant runs
+     * the existing reopenMonth(): missing periods and periods with a later closed month fail,
+     * snapshots are retained, caches are cleared and the reporting outbox row is written in the
+     * same tenant transaction. Cutoffs are never moved; a tenant whose cutoff still covers the
+     * month is reported with a cutoff_active notice (use reopenCutoff() explicitly). The reason
+     * (required) and actor are stored on the run. Scheduled closing never recloses a period
+     * reopened by such a run.
+     */
+    public function reopenMonthGlobally(int $year, int $month, ?array $tenantIds, string $reason, int|string|null $actorId = null): array
+    {
+        $actorId = $actorId === null ? null : trim((string) $actorId);
+        $reason = trim($reason);
+        validator(['year' => $year, 'month' => $month, 'reason' => $reason, 'actor_id' => $actorId], [
+            'year' => ['required', 'integer', 'between:1,9999'],
+            'month' => ['required', 'integer', 'between:1,12'],
+            'reason' => ['required', 'string', 'max:1000'],
+            'actor_id' => ['nullable', 'string', 'max:100'],
+        ])->validate();
+        $runs = $this->closingRuns();
+        $runs->assertUsable(true);
+
+        $ids = $this->globalRunTenantIds($tenantIds, 'reopen');
+        $runId = $runs->createRun($year, $month, $ids, $actorId, 'manual', 'reopen', $reason);
+        $this->dispatchGlobalCloseItems($runs->items($runId)->pluck('id')->all());
+
+        return $this->getGlobalCloseRun($runId);
+    }
+
+    /** Null or [] means every tenant; an explicit list is resolved to canonical ids and deduplicated. */
+    protected function globalRunTenantIds(?array $tenantIds, string $operation): array
+    {
+        $tenants = app(TenantReportRunner::class);
+        $ids = $tenantIds === null || $tenantIds === []
+            ? $tenants->allTenantIds()
+            : array_map('strval', array_keys($tenants->resolveTenants($tenantIds)));
+        if ($ids === []) {
+            throw ValidationException::withMessages(['tenant_ids' => ['No tenants were found to '.$operation.'.']]);
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Progress and results of one close or reopen run, with localized readable messages for failed
+     * and not_due tenants and cutoff notices for reopened tenants. The run's own rows are history;
+     * tracked_period shows the latest close/reopen outcome of the same tenant and period across
+     * every global run (null when none finished).
+     */
     public function getGlobalCloseRun(int $runId): array
     {
         $runs = $this->closingRuns();
@@ -632,21 +680,25 @@ class ClosingService
         if (! $run) {
             throw ValidationException::withMessages(['run_id' => ['Closing run ['.$runId.'] was not found.']]);
         }
+        $operation = ClosingRunRepository::operation($run);
         $items = $runs->items($runId);
         $now = now()->toDateTimeString();
-        $counts = array_fill_keys(ClosingRunRepository::TENANT_STATUSES, 0);
+        $counts = array_fill_keys($operation === 'reopen' ? ClosingRunRepository::REOPEN_TENANT_STATUSES : ClosingRunRepository::TENANT_STATUSES, 0);
         foreach ($items as $item) {
             $counts[$item->status] = ($counts[$item->status] ?? 0) + 1;
         }
+        $tracked = $runs->latestPeriodOutcomes($items->pluck('tenant_id')->all(), (int) $run->year, (int) $run->month);
 
         return [
             'id' => (int) $run->id,
+            'operation' => $operation,
             'year' => (int) $run->year,
             'month' => (int) $run->month,
             'period' => sprintf('%04d-%02d', $run->year, $run->month),
             'trigger' => $run->trigger,
             'status' => $run->status,
             'actor_id' => $run->actor_id,
+            'reason' => $run->reason ?? null,
             'tenant_ids' => json_decode($run->tenant_ids, true, 512, JSON_THROW_ON_ERROR),
             'counts' => ['total' => $items->count()] + $counts,
             'created_at' => $run->created_at,
@@ -663,13 +715,17 @@ class ClosingService
                 'stale' => $item->status === 'processing' && $item->claimed_until !== null && $item->claimed_until < $now,
                 'error' => $item->status === 'failed' ? $this->globalCloseMessage($item, $run) : null,
                 'reason' => $item->status === 'not_due' ? $this->globalCloseMessage($item, $run) : null,
+                'notice' => in_array($item->status, ['reopened', 'already_open'], true) && $item->error_code !== null
+                    ? $this->globalCloseMessage($item, $run) : null,
+                'tracked_period' => $tracked[$item->tenant_id] ?? null,
             ])->all(),
         ];
     }
 
     /**
-     * Requeue failed tenants (and processing tenants whose claim expired) of a run. Completed,
-     * already-closed and not-due tenants are never touched; every attempt rechecks the period.
+     * Requeue failed tenants (and processing tenants whose claim expired) of a close or reopen run.
+     * Finished tenants (closed, already_closed, not_due, reopened, already_open) are never touched;
+     * every attempt rechecks the period.
      */
     public function retryGlobalCloseRun(int $runId, ?array $tenantIds = null): array
     {
@@ -744,14 +800,21 @@ class ClosingService
         $month = (int) $run->month;
         $totals = [];
         try {
+            $reopen = ClosingRunRepository::operation($run) === 'reopen';
             $scheduled = $run->trigger === 'scheduled';
-            $closedBefore = $scheduled && $runs->closedInAnotherRun($item->tenant_id, $year, $month, (int) $run->id);
+            // Periods closed by an earlier run, or reopened by a reopen run, were closed before.
+            $closedBefore = $scheduled && ($runs->closedInAnotherRun($item->tenant_id, $year, $month, (int) $run->id)
+                || $runs->reopenedByRun($item->tenant_id, $year, $month));
+            // An earlier attempt of this item may have committed its reopen before the worker died.
+            $previousAttempt = (int) $item->attempts > 0 ? $item->started_at : null;
             $entered = false;
             try {
-                $outcome = app(TenantReportRunner::class)->run([$item->tenant_id], function () use ($year, $month, $run, $scheduled, $closedBefore, &$totals, &$entered) {
+                $outcome = app(TenantReportRunner::class)->run([$item->tenant_id], function () use ($year, $month, $run, $item, $reopen, $scheduled, $closedBefore, $previousAttempt, &$totals, &$entered) {
                     $entered = true;
 
-                    return $this->closeTenantMonthForRun($year, $month, $run->actor_id, $scheduled, $closedBefore, $totals);
+                    return $reopen
+                        ? $this->reopenTenantMonthForRun($year, $month, $previousAttempt, $run, $item)
+                        : $this->closeTenantMonthForRun($year, $month, $run->actor_id, $scheduled, $closedBefore, $totals);
                 })[0]['report'];
             } catch (Throwable $e) {
                 $outcome = $this->globalCloseFailure($e, $run, $item, $entered);
@@ -815,28 +878,98 @@ class ClosingService
         return ['status' => 'closed'];
     }
 
+    /**
+     * Runs inside the tenant context for a reopen run; rechecks the period on every attempt and
+     * delegates to reopenMonth(), so its locks, rules, outbox write and cache clearing apply.
+     * An open period counts as reopened by this run when an earlier attempt started before the
+     * period's last change and the month still has snapshots from its close (a reopen committed
+     * before the worker died); otherwise it is already_open.
+     */
+    protected function reopenTenantMonthForRun(int $year, int $month, ?string $previousAttempt, object $run, object $item): array
+    {
+        $period = FiscalPeriod::query()->where('year', $year)->where('month', $month)->first();
+        if ($period !== null && ! $period->is_closed) {
+            $recovered = $previousAttempt !== null && $period->updated_at !== null
+                && $period->updated_at->toDateTimeString() >= $previousAttempt
+                && MonthlyBalance::query()->where('fiscal_year', $year)->where('fiscal_month', $month)->exists();
+
+            return ['status' => $recovered ? 'reopened' : 'already_open'] + $this->reopenCutoffNotice($year, $month, $run, $item);
+        }
+
+        try {
+            $this->reopenMonth($year, $month, $run->actor_id);
+        } catch (ClosingPeriodException $e) {
+            // Reopened concurrently between the check above and the lock.
+            if ($e->reason !== ClosingPeriodException::NOT_CLOSED) {
+                throw $e;
+            }
+
+            return ['status' => 'already_open'] + $this->reopenCutoffNotice($year, $month, $run, $item);
+        }
+
+        return ['status' => 'reopened'] + $this->reopenCutoffNotice($year, $month, $run, $item);
+    }
+
+    /**
+     * cutoff_active notice when a closing cutoff (per tenant, or shared with this tenant in scope)
+     * still covers part of the reopened month, so corrections there stay blocked until
+     * reopenCutoff() moves it. A failure to read the cutoff never fails the reopen; it is logged.
+     */
+    protected function reopenCutoffNotice(int $year, int $month, object $run, object $item): array
+    {
+        try {
+            $state = app(FiscalPeriodService::class)->lockClosingCutoff();
+            $date = $state?->cutoff_date;
+            if ($date === null || $date < Carbon::create($year, $month, 1)->toDateString()) {
+                return [];
+            }
+            if (isset($state->tenant_ids) && $state->tenant_ids !== null
+                && ! in_array((string) $item->tenant_id, json_decode($state->tenant_ids, true, 512, JSON_THROW_ON_ERROR), true)) {
+                return [];
+            }
+
+            return ['error_code' => 'cutoff_active', 'error_params' => json_encode(['date' => $date])];
+        } catch (Throwable $e) {
+            AccountingErrorReporter::report($e, 'Accounting global monthly reopening could not read the closing cutoff', [
+                'closing_run_id' => (int) $run->id,
+                'closing_run_tenant_id' => (int) $item->id,
+                'tenant_id' => $item->tenant_id,
+            ]);
+
+            return [];
+        }
+    }
+
     /** Readable failure code plus a reference; the full exception goes to the application log. */
     protected function globalCloseFailure(Throwable $e, object $run, object $item, bool $entered): array
     {
+        $reopen = ClosingRunRepository::operation($run) === 'reopen';
+        $reason = $e instanceof ClosingPeriodException ? $e->reason : null;
         $code = match (true) {
             ! $entered => 'tenant_unavailable',
-            $e instanceof ClosingPeriodException && $e->reason === ClosingPeriodException::UNBALANCED => 'unbalanced_journals',
+            $reason === ClosingPeriodException::UNBALANCED => 'unbalanced_journals',
+            $reopen && $reason === ClosingPeriodException::NOT_FOUND => 'period_not_found',
+            $reopen && $reason === ClosingPeriodException::LATER_MONTH_CLOSED => 'later_month_closed',
             AccountingErrorReporter::isForeignKeyViolation($e) => 'account_reference_mismatch',
             AccountingErrorReporter::isDatabaseError($e) => 'database_error',
             $e instanceof ValidationException => 'configuration_error',
             default => 'unexpected_error',
         };
-        $params = $code === 'unbalanced_journals' ? [
-            'debit' => number_format((float) ($e->details['total_debit'] ?? 0), 2),
-            'credit' => number_format((float) ($e->details['total_credit'] ?? 0), 2),
-        ] : null;
-        $reference = AccountingErrorReporter::report($e, 'Accounting global monthly closing failed', [
+        $params = match ($code) {
+            'unbalanced_journals' => [
+                'debit' => number_format((float) ($e->details['total_debit'] ?? 0), 2),
+                'credit' => number_format((float) ($e->details['total_credit'] ?? 0), 2),
+            ],
+            'later_month_closed' => ['later_year' => (int) ($e->details['year'] ?? 0), 'later_month' => (int) ($e->details['month'] ?? 0)],
+            default => null,
+        };
+        $reference = AccountingErrorReporter::report($e, $reopen ? 'Accounting global monthly reopening failed' : 'Accounting global monthly closing failed', [
             'closing_run_id' => (int) $run->id,
             'closing_run_tenant_id' => (int) $item->id,
             'tenant_id' => $item->tenant_id,
             'period' => sprintf('%04d-%02d', $run->year, $run->month),
             'error_code' => $code,
-        ]);
+        ] + ($reopen ? ['operation' => 'reopen'] : []));
 
         return [
             'status' => 'failed',
@@ -850,15 +983,23 @@ class ClosingService
     {
         $code = $item->error_code ?? ($item->status === 'failed' ? 'unexpected_error' : 'not_due');
         $params = ($item->error_params === null ? [] : json_decode($item->error_params, true)) ?: [];
+        $monthName = fn (int $year, int $month) => Carbon::create($year, $month, 1)->locale(app()->getLocale())->translatedFormat('F Y');
+        if (isset($params['later_year'], $params['later_month'])) {
+            $params['later'] = $monthName((int) $params['later_year'], (int) $params['later_month']);
+            unset($params['later_year'], $params['later_month']);
+        }
         $replace = $params + [
-            'period' => Carbon::create((int) $run->year, (int) $run->month, 1)->locale(app()->getLocale())->translatedFormat('F Y'),
+            'period' => $monthName((int) $run->year, (int) $run->month),
             'reference' => (string) $item->error_reference,
         ];
+        // Reopen runs use their own wording (accounting::closing.reopen.*), falling back to errors.*.
+        $group = ClosingRunRepository::operation($run) === 'reopen' && Lang::has('accounting::closing.reopen.'.$code.'.message')
+            ? 'reopen' : 'errors';
 
         return [
             'code' => $code,
-            'message' => trans('accounting::closing.errors.'.$code.'.message', $replace),
-            'action' => trans('accounting::closing.errors.'.$code.'.action', $replace),
+            'message' => trans('accounting::closing.'.$group.'.'.$code.'.message', $replace),
+            'action' => trans('accounting::closing.'.$group.'.'.$code.'.action', $replace),
             'reference' => $item->error_reference,
         ];
     }

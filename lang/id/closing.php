@@ -37,4 +37,36 @@ return [
             'action' => 'Coba lagi nanti. Jika masih terjadi, hubungi administrator dengan referensi :reference.',
         ],
     ],
+
+    // Hasil pembukaan kembali bulanan global (reopenMonthGlobally()). Kode yang tidak ada di sini memakai errors.*.
+    'reopen' => [
+        'period_not_found' => [
+            'message' => 'Periode fiskal :period tidak ditemukan di perusahaan ini, sehingga tidak ada yang dapat dibuka kembali.',
+            'action' => 'Periksa tahun dan bulan yang dipilih. Referensi: :reference.',
+        ],
+        'later_month_closed' => [
+            'message' => ':period tidak dapat dibuka kembali karena :later masih ditutup.',
+            'action' => 'Buka kembali bulan-bulan berikutnya terlebih dahulu, dimulai dari yang terakhir, lalu coba lagi. Referensi: :reference.',
+        ],
+        'cutoff_active' => [
+            'message' => ':period telah dibuka kembali, tetapi batas penutupan sampai :date masih memblokir koreksi bertanggal pada atau sebelum tanggal tersebut.',
+            'action' => 'Mundurkan batas penutupan dengan reopenCutoff() beserta alasannya sebelum memposting koreksi tersebut.',
+        ],
+        'database_error' => [
+            'message' => 'Basis data akuntansi perusahaan ini tidak dapat diperbarui saat membuka kembali :period.',
+            'action' => 'Coba lagi nanti. Jika masih terjadi, hubungi administrator dengan referensi :reference.',
+        ],
+        'tenant_unavailable' => [
+            'message' => 'Data akuntansi perusahaan ini tidak dapat dibuka untuk membuka kembali :period.',
+            'action' => 'Pastikan perusahaan masih ada dan basis datanya tersedia, lalu coba lagi. Referensi: :reference.',
+        ],
+        'configuration_error' => [
+            'message' => 'Pengaturan penutupan buku tidak valid atau belum lengkap, sehingga :period tidak dapat dibuka kembali.',
+            'action' => 'Minta administrator meninjau pengaturan penutupan akuntansi. Referensi: :reference.',
+        ],
+        'unexpected_error' => [
+            'message' => ':period tidak dapat dibuka kembali karena terjadi masalah yang tidak terduga.',
+            'action' => 'Coba lagi nanti. Jika masih terjadi, hubungi administrator dengan referensi :reference.',
+        ],
+    ],
 ];

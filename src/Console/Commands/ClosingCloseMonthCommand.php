@@ -18,9 +18,11 @@ class ClosingCloseMonthCommand extends Command
         {--scheduled : Scheduler mode: one run per period, later calls resume it, reopened periods are skipped}
         {--recover : Requeue stale or never-run tenants of unfinished runs first}
         {--retry= : Retry the failed tenants of this run id}
-        {--status= : Show this run id}';
+        {--status= : Show this run id}
+        {--reopen : Reopen the month instead of closing it (requires --year, --month and --reason)}
+        {--reason= : Reason recorded on a reopen run}';
 
-    protected $description = 'Close one accounting month in every (or the selected) tenant and report per-tenant results';
+    protected $description = 'Close (or with --reopen, reopen) one accounting month in every (or the selected) tenant and report per-tenant results';
 
     public function handle(ClosingService $closing): int
     {
@@ -35,9 +37,26 @@ class ClosingCloseMonthCommand extends Command
                 foreach ($closing->recoverGlobalCloseRuns() as $recovered) {
                     $this->line('Run #'.$recovered['run_id'].': requeued '.$recovered['dispatched'].' tenant(s).');
                 }
-                if (! $this->option('scheduled') && $this->option('year') === null && $this->option('month') === null) {
+                if (! $this->option('scheduled') && ! $this->option('reopen') && $this->option('year') === null && $this->option('month') === null) {
                     return self::SUCCESS;
                 }
+            }
+            if ($this->option('reopen')) {
+                if ($this->option('scheduled')) {
+                    $this->error('Reopening is never scheduled; drop --scheduled.');
+
+                    return self::FAILURE;
+                }
+                if ($this->option('year') === null || $this->option('month') === null) {
+                    $this->error('Pass --year and --month to reopen.');
+
+                    return self::FAILURE;
+                }
+
+                return $this->render($closing->reopenMonthGlobally(
+                    (int) $this->option('year'), (int) $this->option('month'), $this->tenants(),
+                    (string) $this->option('reason'), $this->option('actor')
+                ));
             }
             if (($this->option('year') === null) !== ($this->option('month') === null)) {
                 $this->error('Pass --year and --month together, or neither for the latest due month.');
@@ -73,9 +92,13 @@ class ClosingCloseMonthCommand extends Command
 
     protected function render(array $run): int
     {
-        $this->info('Closing run #'.$run['id'].' ('.$run['trigger'].') for '.$run['period'].': '.$run['status']);
+        $label = ($run['operation'] ?? 'close') === 'reopen' ? 'Reopening run #' : 'Closing run #';
+        $this->info($label.$run['id'].' ('.$run['trigger'].') for '.$run['period'].': '.$run['status']);
+        if (($run['operation'] ?? 'close') === 'reopen') {
+            $this->line('Reason: '.$run['reason']);
+        }
         $this->table(['tenant_id', 'status', 'attempts', 'debit', 'credit', 'message'], array_map(function (array $tenant) {
-            $detail = $tenant['error'] ?? $tenant['reason'];
+            $detail = $tenant['error'] ?? $tenant['reason'] ?? $tenant['notice'] ?? null;
 
             return [
                 $tenant['tenant_id'],

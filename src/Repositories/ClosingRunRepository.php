@@ -12,7 +12,7 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * Global monthly-closing runs, their per-tenant items and per tenant/period leases, stored on the
+ * Global monthly-closing and -reopening runs (operation close|reopen), their per-tenant items and per tenant/period leases, stored on the
  * master connection (accounting.master_data.connection). Writes are short and never held open
  * while a tenant closes, so tenant and shared-cutoff locks are never nested inside them.
  */
@@ -21,6 +21,11 @@ class ClosingRunRepository
     public const RUN_STATUSES = ['pending', 'processing', 'completed', 'partially_failed', 'failed'];
 
     public const TENANT_STATUSES = ['pending', 'processing', 'closed', 'already_closed', 'not_due', 'failed'];
+
+    /** Tenant statuses of a reopen run (ClosingService::reopenMonthGlobally()). */
+    public const REOPEN_TENANT_STATUSES = ['pending', 'processing', 'reopened', 'already_open', 'failed'];
+
+    public const OPERATIONS = ['close', 'reopen'];
 
     public function __construct(
         protected AccountingConnectionResolver $connections,
@@ -37,14 +42,24 @@ class ClosingRunRepository
         return $name;
     }
 
-    public function assertUsable(): string
+    /** $reopen also requires the operation columns (2026_11_11_000021); closing works without them. */
+    public function assertUsable(bool $reopen = false): string
     {
         $connection = $this->connectionName();
         if (! Schema::connection($connection)->hasTable($this->table('runs'))) {
             throw new RuntimeException('Global monthly closing tables are missing on connection ['.$connection.']. Run the accounting migrations against that connection (php artisan migrate --database='.$connection.').');
         }
+        if ($reopen && ! Schema::connection($connection)->hasColumn($this->table('runs'), 'operation')) {
+            throw new RuntimeException('Global monthly reopening columns are missing on connection ['.$connection.']. Run the accounting migrations against that connection (php artisan migrate --database='.$connection.').');
+        }
 
         return $connection;
+    }
+
+    /** A run's operation; rows written before the operation column existed are close runs. */
+    public static function operation(object $run): string
+    {
+        return ($run->operation ?? null) === 'reopen' ? 'reopen' : 'close';
     }
 
     public function db(): ConnectionInterface
@@ -57,16 +72,19 @@ class ClosingRunRepository
         return $this->tables->table($name === 'runs' ? 'closing_runs' : 'closing_run_'.$name);
     }
 
-    /** Insert the run and one pending item per tenant atomically; returns the run id. */
-    public function createRun(int $year, int $month, array $tenantIds, ?string $actorId, string $trigger): int
+    /**
+     * Insert the run and one pending item per tenant atomically; returns the run id. Close runs
+     * leave operation to its column default, so closing keeps working before 2026_11_11_000021.
+     */
+    public function createRun(int $year, int $month, array $tenantIds, ?string $actorId, string $trigger, string $operation = 'close', ?string $reason = null): int
     {
-        return $this->db()->transaction(function () use ($year, $month, $tenantIds, $actorId, $trigger) {
+        return $this->db()->transaction(function () use ($year, $month, $tenantIds, $actorId, $trigger, $operation, $reason) {
             $now = $this->now();
             $runId = (int) $this->db()->table($this->table('runs'))->insertGetId([
                 'year' => $year, 'month' => $month, 'trigger' => $trigger, 'status' => 'pending', 'actor_id' => $actorId,
                 'tenant_ids' => json_encode(array_values($tenantIds), JSON_THROW_ON_ERROR), 'tenant_count' => count($tenantIds),
                 'created_at' => $now, 'updated_at' => $now,
-            ]);
+            ] + ($operation === 'close' ? [] : ['operation' => $operation, 'reason' => $reason]));
             foreach (array_chunk($tenantIds, 500) as $chunk) {
                 $this->db()->table($this->table('tenants'))->insert(array_map(fn (string $tenantId) => [
                     'run_id' => $runId, 'tenant_id' => $tenantId, 'status' => 'pending', 'attempts' => 0,
@@ -186,6 +204,50 @@ class ClosingRunRepository
             ->where($runs.'.year', $year)->where($runs.'.month', $month)->exists();
     }
 
+    /** Whether a global reopen run reopened this tenant/period. */
+    public function reopenedByRun(string $tenantId, int $year, int $month): bool
+    {
+        $runs = $this->table('runs');
+        $items = $this->table('tenants');
+
+        return $this->db()->table($items)->join($runs, $runs.'.id', '=', $items.'.run_id')
+            ->where($items.'.tenant_id', $tenantId)->where($items.'.status', 'reopened')
+            ->where($runs.'.year', $year)->where($runs.'.month', $month)->exists();
+    }
+
+    /**
+     * The latest finished close or reopen outcome per tenant for one period across every run, so a
+     * historical run can show what happened to its periods afterwards without changing its own rows.
+     * Only global runs are tracked; direct closeMonth()/reopenMonth() calls are not.
+     *
+     * @return array<string, array{state: string, run_id: int, operation: string, status: string, finished_at: ?string}>
+     */
+    public function latestPeriodOutcomes(array $tenantIds, int $year, int $month): array
+    {
+        $runs = $this->table('runs');
+        $items = $this->table('tenants');
+        $latest = [];
+        foreach (array_chunk(array_values(array_unique($tenantIds)), 500) as $chunk) {
+            $rows = $this->db()->table($items)->join($runs, $runs.'.id', '=', $items.'.run_id')
+                ->where($runs.'.year', $year)->where($runs.'.month', $month)->whereIn($items.'.tenant_id', $chunk)
+                ->whereIn($items.'.status', ['closed', 'already_closed', 'reopened', 'already_open'])
+                ->orderBy($items.'.finished_at')->orderBy($items.'.id')
+                ->get([$items.'.tenant_id', $items.'.run_id', $items.'.status', $items.'.finished_at']);
+            foreach ($rows as $row) {
+                $open = in_array($row->status, ['reopened', 'already_open'], true);
+                $latest[$row->tenant_id] = [
+                    'state' => $open ? 'open' : 'closed',
+                    'run_id' => (int) $row->run_id,
+                    'operation' => $open ? 'reopen' : 'close',
+                    'status' => $row->status,
+                    'finished_at' => $row->finished_at,
+                ];
+            }
+        }
+
+        return $latest;
+    }
+
     /**
      * Return failed items, and processing items whose claim expired, to pending.
      *
@@ -233,6 +295,10 @@ class ClosingRunRepository
                 default => 'partially_failed',
             };
             $now = $this->now();
+            $reopen = self::operation($run) === 'reopen' ? [
+                'reopened_count' => $counts['reopened'] ?? 0,
+                'already_open_count' => $counts['already_open'] ?? 0,
+            ] : [];
             $this->db()->table($this->table('runs'))->where('id', $runId)->update([
                 'status' => $status,
                 'closed_count' => $counts['closed'] ?? 0,
@@ -241,7 +307,7 @@ class ClosingRunRepository
                 'failed_count' => $failed,
                 'finished_at' => $active > 0 ? null : ($run->finished_at ?? $now),
                 'updated_at' => $now,
-            ]);
+            ] + $reopen);
         });
     }
 

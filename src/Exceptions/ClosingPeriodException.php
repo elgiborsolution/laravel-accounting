@@ -16,6 +16,12 @@ class ClosingPeriodException extends Exception
 
     public const UNBALANCED = 'unbalanced';
 
+    /** reopenMonth(): the period is open. */
+    public const NOT_CLOSED = 'not_closed';
+
+    /** reopenMonth(): a later month is closed; details hold its year and month. */
+    public const LATER_MONTH_CLOSED = 'later_month_closed';
+
     public function __construct(public readonly string $reason, string $message, public readonly array $details = [])
     {
         parent::__construct($message);

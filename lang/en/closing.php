@@ -37,4 +37,36 @@ return [
             'action' => 'Retry later. If it keeps happening, contact an administrator with reference :reference.',
         ],
     ],
+
+    // Global monthly-reopening outcomes (reopenMonthGlobally()). Codes missing here fall back to errors.*.
+    'reopen' => [
+        'period_not_found' => [
+            'message' => 'The :period fiscal period does not exist for this company, so there is nothing to reopen.',
+            'action' => 'Check the selected year and month. Reference: :reference.',
+        ],
+        'later_month_closed' => [
+            'message' => ':period cannot be reopened because :later is still closed.',
+            'action' => 'Reopen the later months first, latest first, then retry. Reference: :reference.',
+        ],
+        'cutoff_active' => [
+            'message' => ':period was reopened, but the closing cutoff through :date still blocks corrections dated on or before it.',
+            'action' => 'Move the cutoff back with reopenCutoff() and a reason before posting those corrections.',
+        ],
+        'database_error' => [
+            'message' => 'The accounting database for this company could not be updated while reopening :period.',
+            'action' => 'Retry later. If it keeps happening, contact an administrator with reference :reference.',
+        ],
+        'tenant_unavailable' => [
+            'message' => 'This company\'s accounting data could not be opened to reopen :period.',
+            'action' => 'Check that the company still exists and its database is available, then retry. Reference: :reference.',
+        ],
+        'configuration_error' => [
+            'message' => 'The closing settings are invalid or incomplete, so :period could not be reopened.',
+            'action' => 'Ask an administrator to review the accounting closing settings. Reference: :reference.',
+        ],
+        'unexpected_error' => [
+            'message' => ':period could not be reopened because of an unexpected problem.',
+            'action' => 'Retry later. If it keeps happening, contact an administrator with reference :reference.',
+        ],
+    ],
 ];
