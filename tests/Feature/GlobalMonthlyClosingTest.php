@@ -14,6 +14,8 @@ use ESolution\LaravelAccounting\Services\ReportingSyncService;
 use ESolution\LaravelAccounting\Tests\Feature\Concerns\CentralReportingFixture;
 use ESolution\LaravelAccounting\Tests\Feature\Concerns\ReportingTenant;
 use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
@@ -432,7 +434,136 @@ class GlobalMonthlyClosingTest extends TestCase
             app(ReportingSyncService::class)->status(['tenant-a'])[0]['last_error']);
     }
 
+    /**
+     * ACCOUNTING_CLOSING_QUEUE_CONNECTION=sync with no worker: the real sync driver (no Queue::fake())
+     * runs one job per tenant inline, after commit, even when the host default queue would never
+     * run them. A failing tenant is recorded and the others still close.
+     */
+    public function test_sync_queue_connection_closes_every_tenant_inline_without_a_worker(): void
+    {
+        $this->prepare();
+        $this->captureLogs();
+        $this->parkHostDefaultQueue();
+        config()->set('accounting.closing.global.queue_connection', 'sync');
+        config()->set('accounting.closing.global.queue', 'accounting-closing');
+        $jobs = $this->recordQueueEvents();
+        $this->migrateMonthlyBalances('rp_b', withAccountForeignKey: true);
+        $this->tenancy->initialize(ReportingTenant::findOrFail('tenant-c')); // The caller's own tenant context.
+        $closing = app(ClosingService::class);
+
+        $run = $closing->closeMonthGlobally(2026, 7);
+
+        // Every job already ran on the sync connection before the call returned (sync ignores queue names).
+        $this->assertSame([
+            ['processed', 'sync', CloseTenantMonthJob::class],
+            ['processed', 'sync', CloseTenantMonthJob::class],
+            ['processed', 'sync', CloseTenantMonthJob::class],
+        ], $jobs->events);
+        $this->assertSame('partially_failed', $run['status']);
+        $this->assertSame(['pending' => 0, 'processing' => 0, 'closed' => 2, 'failed' => 1],
+            array_intersect_key($run['counts'], array_flip(['closed', 'failed', 'pending', 'processing'])));
+        $this->assertNotNull($run['finished_at']);
+        $this->assertSame(['closed', 'failed', 'closed'], array_column($run['tenants'], 'status'));
+        $error = $this->tenant($run, 'tenant-b')['error'];
+        $this->assertSame('account_reference_mismatch', $error['code']);
+        $this->assertSame('tenant-b', $this->loggedReference($error['reference'])->context['tenant_id']);
+        $this->assertTrue($this->periodClosed('tenant-a', 7));
+        $this->assertFalse($this->periodClosed('tenant-b', 7));
+        $this->assertSame(0, DB::connection('rp_master')->table('acc_closing_run_locks')->whereNotNull('token')->count());
+        // The caller's tenant and default connection are back after each inline job.
+        $this->assertSame('tenant-c', $this->tenancy->tenant->getKey());
+        $this->assertSame('rp_c', DB::getDefaultConnection());
+        foreach (['rp_master', 'rp_a', 'rp_b', 'rp_c', 'rp_caller'] as $connection) {
+            $this->assertSame(0, DB::connection($connection)->transactionLevel());
+        }
+        $this->tenancy->end();
+
+        // Inside a caller transaction nothing runs until it commits.
+        $jobs->events = [];
+        $inside = DB::connection('rp_caller')->transaction(function () use ($closing, $jobs) {
+            $run = $closing->closeMonthGlobally(2026, 8, ['tenant-a']);
+            $this->assertSame([], $jobs->events);
+
+            return $run;
+        });
+        $this->assertSame('pending', $inside['status']);
+        $this->assertCount(1, $jobs->events);
+        $this->assertSame('completed', $closing->getGlobalCloseRun($inside['id'])['status']);
+
+        // A retry also runs inline and closes only the failed tenant.
+        $this->migrateMonthlyBalances('rp_b', withAccountForeignKey: false);
+        $jobs->events = [];
+        $retried = $closing->retryGlobalCloseRun($run['id']);
+        $this->assertCount(1, $jobs->events);
+        $this->assertSame('completed', $retried['status']);
+        $this->assertSame([1, 2, 1], array_column($retried['tenants'], 'attempts'));
+        $this->assertSame(0, $jobs->failed);
+        $this->assertContextRestored();
+    }
+
+    public static function unsetQueueConnections(): array
+    {
+        return ['null' => [null], 'empty string' => [''], 'missing key' => ['missing']];
+    }
+
+    /** Null, '' (ACCOUNTING_CLOSING_QUEUE_CONNECTION=) and a missing key all use the host's queue.default. */
+    #[DataProvider('unsetQueueConnections')]
+    public function test_unset_queue_connection_settings_follow_the_host_default_queue(?string $setting): void
+    {
+        $this->prepare();
+        $apply = function () use ($setting) {
+            if ($setting === 'missing') {
+                config()->set('accounting.closing', array_diff_key(config('accounting.closing'), ['global' => true]));
+            } else {
+                config()->set('accounting.closing.global.queue_connection', $setting);
+                config()->set('accounting.closing.global.queue', $setting);
+            }
+        };
+        $apply();
+        $jobs = $this->recordQueueEvents();
+        $closing = app(ClosingService::class);
+
+        config()->set('queue.default', 'sync');
+        $inline = $closing->closeMonthGlobally(2026, 7, ['tenant-a']);
+        $this->assertSame('completed', $inline['status']);
+        $this->assertSame([['processed', 'sync', CloseTenantMonthJob::class]], $jobs->events);
+
+        // A host default that never runs jobs leaves the tenant pending for a worker.
+        $this->parkHostDefaultQueue();
+        $apply();
+        $parked = $closing->closeMonthGlobally(2026, 7, ['tenant-b']);
+        $this->assertSame('pending', $parked['status']);
+        $this->assertCount(1, $jobs->events);
+        $this->assertFalse($this->periodClosed('tenant-b', 7));
+    }
+
     // ------------------------------------------------------------------ helpers
+
+    /** Point queue.default at a null-driver connection, which accepts jobs and never runs them. */
+    private function parkHostDefaultQueue(): void
+    {
+        config()->set('queue.connections.parked', ['driver' => 'null']);
+        config()->set('queue.default', 'parked');
+    }
+
+    /** Records [event, connection, job class] for every processed job, and counts failures. */
+    private function recordQueueEvents(): object
+    {
+        $jobs = new class
+        {
+            public array $events = [];
+
+            public int $failed = 0;
+        };
+        Event::listen(JobProcessed::class, function (JobProcessed $event) use ($jobs) {
+            $jobs->events[] = ['processed', $event->connectionName, $event->job->resolveName()];
+        });
+        Event::listen(JobFailed::class, function () use ($jobs) {
+            $jobs->failed++;
+        });
+
+        return $jobs;
+    }
 
     /** Three tenants with July activity in tenant-a and tenant-b; "now" is 2026-08-20. */
     private function prepare(bool $shared = true): void

@@ -475,7 +475,16 @@ Shared events use the same fields shown above plus `"tenant_ids": ["branch-a", "
 
 A global close never publishes, advances or changes a shared cutoff or its scope, in any mode. Use `closeThroughDate()` for that.
 
-**Setup.** Requires `accounting.master_data.connection` (`ACCOUNTING_MASTER_CONNECTION`) to name a configured connection, with or without `use_shared_database`, and a configured `tenancy.tenant_model`. Run `2026_11_09_000020_create_acc_closing_runs_tables` against that connection (`php artisan migrate --database=<master>`). Like the shared cutoff migration, it does nothing on tenant runs. Without the tables, the methods throw a `RuntimeException` naming the connection. Run a queue worker for `accounting.closing.global.queue_connection` / `queue` (null uses the host defaults). With the `sync` driver, jobs run inline and the returned run is already complete.
+**Setup.** Requires `accounting.master_data.connection` (`ACCOUNTING_MASTER_CONNECTION`) to name a configured connection, with or without `use_shared_database`, and a configured `tenancy.tenant_model`. Run `2026_11_09_000020_create_acc_closing_runs_tables` against that connection (`php artisan migrate --database=<master>`). Like the shared cutoff migration, it does nothing on tenant runs. Without the tables, the methods throw a `RuntimeException` naming the connection. Run a queue worker for `accounting.closing.global.queue_connection` / `queue` (null uses the host defaults). With the `sync` driver, jobs run inline and the returned run is already complete. No worker is needed, but there are caveats (verified on Laravel 13.19):
+
+- **Unset settings.** A null, empty (`ACCOUNTING_CLOSING_QUEUE_CONNECTION=`) or missing `queue_connection` uses the host's `queue.default`. Set `sync` explicitly when the host default is a worker queue.
+- **Queue name.** It is ignored by `sync`.
+- **Caller transactions.** Inside one, the jobs run when it commits.
+- **Tenant failures.** They are recorded and the other tenants continue.
+- **Job-level exceptions.** A failure outside the tenant work, such as the master connection failing while the result is recorded, is rethrown to the caller. Tenants not yet dispatched stay `pending` and the failing tenant stays `processing`. `recoverGlobalCloseRuns()` (`--recover`) completes them after one lease, and a close that already committed is reported as `already_closed`.
+- **Busy tenants.** A tenant whose tenant/period lease is held elsewhere is not retried by `sync` (release is a no-op). It stays `pending` until recovered.
+
+Schedule `--recover` when using `sync`.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |

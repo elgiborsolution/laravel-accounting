@@ -269,7 +269,7 @@ Existing closing methods, signatures and return values are unchanged. Usage, sta
 - `CentralReportingRepository::recordFailure()` gained an optional `$reference` and stores readable text. Database failures become `a database error occurred (SQLSTATE x)`; other messages are unchanged.
 - `readiness()` / `status()` also sanitize legacy stored `last_error` values containing SQL. Before this, `assertReady()` validation messages exposed raw SQL to central-mode report callers.
 
-**Tests.** `tests/Feature/GlobalMonthlyClosingTest.php` (14 tests, SQLite) covers:
+**Tests.** `tests/Feature/GlobalMonthlyClosingTest.php` (SQLite; 14 tests at introduction, 18 since 2026-11-11) covers:
 - both master modes, default/explicit/alias tenant selection, and progress flags mid-close;
 - a foreign-key partial failure with log reference and retry of failed tenants only;
 - unbalanced and unavailable tenants, with context restoration;
@@ -277,6 +277,8 @@ Existing closing methods, signatures and return values are unchanged. Usage, sta
 - dispatch after commit and caller rollback;
 - scheduled reopen protection and resume, `not_due` in `en` and `id`;
 - shared-cutoff preservation, migration ownership, the command, and reporting sanitization.
+- Since 2026-11-11, the real `sync` driver (no `Queue::fake()`) with `closing.global.queue_connection = sync` while the host default never runs jobs: three tenants with one failing, after-commit inside a caller transaction, inline retry and context restoration. Null, empty and missing connection settings follow `queue.default`.
+- Not covered by tests, but confirmed by a throwaway probe: under `sync`, a job-level exception (master write failure) is rethrown to the caller, leaving later tenants `pending` until `recoverGlobalCloseRuns()`. A busy lease leaves the tenant `pending`, because `SyncJob::release()` does not requeue.
 
 ## Scoped update: global monthly reopening (2026-11-11)
 
